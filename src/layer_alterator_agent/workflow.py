@@ -11,6 +11,7 @@ def generate_layer_alterator_inputs(
     vector_path: str,
     reference_table_path: str,
     polygon_descriptions: dict,
+    id_column: str = None,
     output_dir: str = "data/layer_alterator_outputs",
 ):
     output_dir = Path(output_dir)
@@ -27,6 +28,7 @@ def generate_layer_alterator_inputs(
         reference_df=reference_df,
         polygon_descriptions=polygon_descriptions,
         output_path=str(updated_vector_path),
+        id_column=id_column,
     )
 
     generate_mask_rules(str(rules_path))

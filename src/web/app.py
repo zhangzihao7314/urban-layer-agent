@@ -20,7 +20,11 @@ from src.core.logger import log
 from config.settings import settings
 
 from src.layer_alterator_agent.workflow import generate_layer_alterator_inputs
-from src.layer_alterator_agent.vector_writer import load_vector, get_polygon_ids
+from src.layer_alterator_agent.vector_writer import (
+    load_vector,
+    get_polygon_ids,
+    resolve_id_column,
+)
 from src.layer_alterator_agent.matcher import match_urban_type
 from src.layer_alterator_agent.reference_loader import (
     load_reference_table,
@@ -1715,6 +1719,7 @@ def show_layer_alterator_agent_page():
         "la_vector_name": None,
         "la_gdf": None,
         "la_polygon_ids": [],
+        "la_id_column": None,
         "la_global_goal": "",
         "la_polygon_descriptions": {},
         "la_current_polygon_index": 0,
@@ -1932,6 +1937,7 @@ def show_layer_alterator_agent_page():
                     vector_path=st.session_state.la_vector_path,
                     reference_table_path=str(reference_table_path),
                     polygon_descriptions=st.session_state.la_polygon_descriptions,
+                    id_column=st.session_state.la_id_column,
                     output_dir=str(settings.PROJECT_ROOT / "data" / "layer_alterator_outputs"),
                 )
 
@@ -2019,12 +2025,14 @@ def show_layer_alterator_agent_page():
                     st.error("The uploaded vector contains no features.")
                     return
 
-                polygon_ids = get_polygon_ids(gdf)
+                id_column = resolve_id_column(gdf)
+                polygon_ids = get_polygon_ids(gdf, id_column)
 
                 st.session_state.la_vector_path = str(vector_path)
                 st.session_state.la_vector_name = uploaded_vector.name
                 st.session_state.la_gdf = gdf
                 st.session_state.la_polygon_ids = polygon_ids
+                st.session_state.la_id_column = id_column
                 st.session_state.la_polygon_descriptions = {
                     pid: "" for pid in polygon_ids
                 }
@@ -2038,7 +2046,8 @@ def show_layer_alterator_agent_page():
                 add_message(
                     "assistant",
                     "Vector uploaded successfully. "
-                    f"I detected **{len(polygon_ids)} polygon(s)**."
+                    f"I detected **{len(polygon_ids)} polygon(s)** "
+                    f"using **{id_column}** as the zone ID."
                 )
 
                 add_message("assistant", msg_type="vector_preview")
@@ -2737,7 +2746,6 @@ def show_settings_page():
 
 if __name__ == "__main__":
     main()
-
 
 
 

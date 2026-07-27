@@ -4,6 +4,34 @@ import geopandas as gpd
 from src.layer_alterator_agent.attribute_generator import generate_polygon_attributes
 
 
+ID_COLUMN_CANDIDATES = ["polygon_id", "fid", "id", "name"]
+
+
+def resolve_id_column(gdf: gpd.GeoDataFrame, id_column: str = None) -> str:
+    """Select and validate a stable polygon identifier column."""
+    if id_column:
+        if id_column not in gdf.columns:
+            raise ValueError(f"ID column not found: {id_column}")
+        selected = id_column
+    else:
+        columns_by_lower = {str(col).lower(): col for col in gdf.columns}
+        selected = next(
+            (columns_by_lower[name] for name in ID_COLUMN_CANDIDATES if name in columns_by_lower),
+            None,
+        )
+
+        if selected is None:
+            selected = "polygon_id"
+            gdf[selected] = range(1, len(gdf) + 1)
+
+    if gdf[selected].isna().any():
+        raise ValueError(f"ID column '{selected}' contains empty values.")
+    if not gdf[selected].is_unique:
+        raise ValueError(f"ID column '{selected}' contains duplicate values.")
+
+    return selected
+
+
 def load_vector(vector_path: str) -> gpd.GeoDataFrame:
     """
     Load vector polygon file.
@@ -12,14 +40,11 @@ def load_vector(vector_path: str) -> gpd.GeoDataFrame:
     return gpd.read_file(vector_path)
 
 
-def get_polygon_ids(gdf: gpd.GeoDataFrame, id_column: str = "polygon_id") -> list:
+def get_polygon_ids(gdf: gpd.GeoDataFrame, id_column: str = None) -> list:
     """
-    Get polygon IDs from vector.
-    If polygon_id does not exist, create IDs from row index.
+    Get polygon IDs from a validated source identifier column.
     """
-    if id_column not in gdf.columns:
-        gdf[id_column] = range(1, len(gdf) + 1)
-
+    id_column = resolve_id_column(gdf, id_column)
     return gdf[id_column].tolist()
 
 
@@ -28,7 +53,7 @@ def write_attributes_to_vector(
     reference_df,
     polygon_descriptions: dict,
     output_path: str,
-    id_column: str = "polygon_id",
+    id_column: str = None,
 ) -> str:
     """
     Write generated Layer Alterator attributes back to vector.
@@ -41,8 +66,7 @@ def write_attributes_to_vector(
     """
     gdf = load_vector(vector_path)
 
-    if id_column not in gdf.columns:
-        gdf[id_column] = range(1, len(gdf) + 1)
+    id_column = resolve_id_column(gdf, id_column)
 
     for idx, row in gdf.iterrows():
         polygon_id = row[id_column]
