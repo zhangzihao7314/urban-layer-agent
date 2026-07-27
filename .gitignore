@@ -1,0 +1,29 @@
+# Local configuration
+.env
+
+# Python virtual environments
+.venv/
+venv/
+
+# Python caches
+__pycache__/
+*.py[cod]
+
+# IDE settings
+.idea/
+.vscode/
+
+# Runtime logs and caches
+logs/
+*.log
+.pytest_cache/
+
+# Generated runtime data
+data/chroma_db/
+data/conversations/
+data/layer_alterator_outputs/
+data/uploads/
+
+# Operating system files
+Thumbs.db
+.DS_Store
