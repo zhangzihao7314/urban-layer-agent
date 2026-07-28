@@ -1878,7 +1878,7 @@ def show_layer_alterator_agent_page():
             reply += (
                 "\nYou can continue freely. For example:\n"
                 "- `Make all polygons Dense trees`\n"
-                "- `Polygon 2 should become Water`\n"
+                f"- `Polygon {st.session_state.la_polygon_ids[0]} should become Water`\n"
                 "- `Why did you recommend this?`\n"
                 "- `Generate`"
             )
@@ -1926,8 +1926,12 @@ def show_layer_alterator_agent_page():
 
         # 3. Set or modify one polygon
         if intent == "set_polygon":
-            pid = intent_result.get("polygon_id")
-            desc = intent_result.get("target_description")
+            # Prefer the user's original wording. The LLM router may paraphrase
+            # "a park" and accidentally remove the keyword needed for
+            # clarification.
+            parsed_pid, parsed_desc = extract_polygon_id_and_description(user_text)
+            pid = parsed_pid if parsed_pid is not None else intent_result.get("polygon_id")
+            desc = parsed_desc or intent_result.get("target_description")
 
             if pid is not None:
                 try:
@@ -1935,14 +1939,14 @@ def show_layer_alterator_agent_page():
                 except Exception:
                     pid = None
 
-            # fallback: if LLM did not extract clearly, use rule-based parser
-            if pid is None or not desc:
-                pid, desc = extract_polygon_id_and_description(user_text)
-
             if pid is None or pid not in st.session_state.la_polygon_ids:
                 add_message(
                     "assistant",
-                    "I could not identify a valid polygon ID. Please write something like: `Polygon 2 should become Water`."
+                    (
+                        "I could not identify a valid polygon ID. "
+                        f"Please write something like: `Polygon {st.session_state.la_polygon_ids[0]} "
+                        "should become Water`."
+                    ),
                 )
                 return
 
