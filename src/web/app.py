@@ -1810,6 +1810,19 @@ def show_layer_alterator_agent_page():
                 )
                 return
 
+            try:
+                matched_type = match_urban_type(desc)
+                get_predictor_values(reference_df, matched_type)
+            except Exception as e:
+                add_message(
+                    "assistant",
+                    (
+                        f"I could not match **{desc}** to a supported urban type, "
+                        f"so no polygon was changed.\n\nDetails: {e}"
+                    ),
+                )
+                return
+
             for pid in st.session_state.la_polygon_ids:
                 st.session_state.la_polygon_descriptions[pid] = desc
 
@@ -1859,18 +1872,18 @@ def show_layer_alterator_agent_page():
                 )
                 return
 
-            st.session_state.la_polygon_descriptions[pid] = desc
-
-            before_after_df = build_before_after_table(
-                st.session_state.la_polygon_descriptions,
-                reference_df,
-            )
-            st.session_state.la_before_after_df = before_after_df
-
             try:
                 matched_type = match_urban_type(desc)
                 values = get_predictor_values(reference_df, matched_type)
                 key_summary, full_summary, explanation = get_predictor_summary_for_type(matched_type, values)
+
+                st.session_state.la_polygon_descriptions[pid] = desc
+
+                before_after_df = build_before_after_table(
+                    st.session_state.la_polygon_descriptions,
+                    reference_df,
+                )
+                st.session_state.la_before_after_df = before_after_df
 
                 reply = f"Polygon {pid} has been updated to **{desc}**.\n\n"
                 reply += f"Matched LCZ urban type: **{matched_type}**\n\n"
@@ -1888,7 +1901,10 @@ def show_layer_alterator_agent_page():
             except Exception as e:
                 add_message(
                     "assistant",
-                    f"Polygon {pid} was updated, but the matcher could not fully validate it yet: {e}"
+                    (
+                        f"I could not match **{desc}** to a supported urban type, "
+                        f"so Polygon {pid} was not changed.\n\nDetails: {e}"
+                    ),
                 )
 
             st.session_state.la_stage = "free_chat"
@@ -2746,7 +2762,6 @@ def show_settings_page():
 
 if __name__ == "__main__":
     main()
-
 
 
 
