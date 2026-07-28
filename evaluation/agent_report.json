@@ -1,0 +1,79 @@
+{
+  "case_count": 8,
+  "planning_typology_accuracy": 1.0,
+  "candidate_ranking_accuracy": 1.0,
+  "details": [
+    {
+      "text": "Polygon 7 should become a park",
+      "expected_planning_typology": "Urban Park",
+      "expected_top_group": "Scattered trees|Low Plants|Dense trees",
+      "predicted_planning_typology": "Urban Park",
+      "predicted_top_type": "Scattered trees",
+      "typology_ok": true,
+      "ranking_ok": true
+    },
+    {
+      "text": "Polygon 7 should become a wooded park",
+      "expected_planning_typology": "Urban Park",
+      "expected_top_group": "Dense trees|Scattered trees",
+      "predicted_planning_typology": "Urban Park",
+      "predicted_top_type": "Dense trees",
+      "typology_ok": true,
+      "ranking_ok": true
+    },
+    {
+      "text": "Polygon 8 should become an urban forest",
+      "expected_planning_typology": "Urban Forest",
+      "expected_top_group": "Dense trees",
+      "predicted_planning_typology": "Urban Forest",
+      "predicted_top_type": "Dense trees",
+      "typology_ok": true,
+      "ranking_ok": true
+    },
+    {
+      "text": "Polygon 9 should become a grass park",
+      "expected_planning_typology": "Urban Park",
+      "expected_top_group": "Low Plants",
+      "predicted_planning_typology": "Urban Park",
+      "predicted_top_type": "Low Plants",
+      "typology_ok": true,
+      "ranking_ok": true
+    },
+    {
+      "text": "Turn Polygon 7 into a waterfront",
+      "expected_planning_typology": "Waterfront",
+      "expected_top_group": "Water",
+      "predicted_planning_typology": "Waterfront",
+      "predicted_top_type": "Water",
+      "typology_ok": true,
+      "ranking_ok": true
+    },
+    {
+      "text": "Use Polygon 8 for industrial logistics",
+      "expected_planning_typology": "Industrial / Logistics",
+      "expected_top_group": "Large low-rise",
+      "predicted_planning_typology": "Industrial / Logistics",
+      "predicted_top_type": "Large low-rise",
+      "typology_ok": true,
+      "ranking_ok": true
+    },
+    {
+      "text": "Make Polygon 9 a large paved transport area",
+      "expected_planning_typology": "Transport / Large Paved",
+      "expected_top_group": "Bare rock or paved",
+      "predicted_planning_typology": "Transport / Large Paved",
+      "predicted_top_type": "Bare rock or paved",
+      "typology_ok": true,
+      "ranking_ok": true
+    },
+    {
+      "text": "Create suburban detached housing in Polygon 7",
+      "expected_planning_typology": "Suburban Detached Housing",
+      "expected_top_group": "Open low-rise",
+      "predicted_planning_typology": "Suburban Detached Housing",
+      "predicted_top_type": "Open low-rise",
+      "typology_ok": true,
+      "ranking_ok": true
+    }
+  ]
+}

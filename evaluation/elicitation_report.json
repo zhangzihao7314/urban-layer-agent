@@ -1,0 +1,72 @@
+{
+  "case_count": 8,
+  "task_success_rate": 1.0,
+  "average_clarification_turns": 1.875,
+  "repeated_question_rate": 0.0,
+  "details": [
+    {
+      "name": "cooling recreation park",
+      "complete": true,
+      "top_type": "Scattered trees",
+      "question_count": 2,
+      "repeated_questions": 0,
+      "passed": true
+    },
+    {
+      "name": "grass activity park",
+      "complete": true,
+      "top_type": "Low Plants",
+      "question_count": 2,
+      "repeated_questions": 0,
+      "passed": true
+    },
+    {
+      "name": "wooded cooling park",
+      "complete": true,
+      "top_type": "Dense trees",
+      "question_count": 2,
+      "repeated_questions": 0,
+      "passed": true
+    },
+    {
+      "name": "stormwater park",
+      "complete": true,
+      "top_type": "Scattered trees",
+      "question_count": 3,
+      "repeated_questions": 0,
+      "passed": true
+    },
+    {
+      "name": "already complete grass request",
+      "complete": true,
+      "top_type": "Low Plants",
+      "question_count": 0,
+      "repeated_questions": 0,
+      "passed": true
+    },
+    {
+      "name": "biodiversity forest style",
+      "complete": true,
+      "top_type": "Dense trees",
+      "question_count": 2,
+      "repeated_questions": 0,
+      "passed": true
+    },
+    {
+      "name": "open shade compromise",
+      "complete": true,
+      "top_type": "Scattered trees",
+      "question_count": 2,
+      "repeated_questions": 0,
+      "passed": true
+    },
+    {
+      "name": "no water constraint",
+      "complete": true,
+      "top_type": "Scattered trees",
+      "question_count": 2,
+      "repeated_questions": 0,
+      "passed": true
+    }
+  ]
+}

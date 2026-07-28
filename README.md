@@ -15,14 +15,16 @@ The LLM does not invent predictor values and does not directly edit rasters.
 Numerical values come from the reference table and GIS operations are performed
 by deterministic Python functions.
 
-## Current MVP workflow
+## Current thesis-Agent workflow
 
 1. Upload a polygon vector.
 2. Select a stable zone ID (`polygon_id`, `fid`, `id`, or `name`).
 3. Describe the overall simulation goal.
 4. Describe a target transformation for each polygon.
-5. Clarify ambiguous descriptions.
-6. Review the proposed LCZ urban type and reference values.
+5. Let the Agent ask one important clarification question at a time until the
+   requirement is sufficiently complete.
+6. Review scored LCZ scenarios, assumptions, confidence, reference evidence,
+   alternatives, and limitations.
 7. Confirm or revise each proposal.
 8. Generate `updated_vector.geojson` and `rules.json`.
 9. Run the C1 Layer Alterator against the UCP and fraction raster folders.
@@ -46,8 +48,25 @@ Default address: <http://127.0.0.1:8501>
 python -m pytest tests -q
 ```
 
-The tests cover ID preservation, intent routing, typology matching, clarification,
-confirmation, reference-value validation, and a complete 12-raster C1 run.
+The tests cover ID preservation, intent routing, professor-table retrieval,
+multi-turn requirement elicitation, multi-polygon instructions, constraints,
+undo/confirmation, scenario scoring, partial unchanged polygons, reference-value
+validation, output validation, and a complete 12-raster C1 run.
+
+## Run all engineering verification
+
+```powershell
+python verify_project.py
+```
+
+This runs the automated tests and all small development-set evaluations. Their
+scores are engineering regression indicators, not the final controlled thesis
+experiment.
+
+## Thesis documentation
+
+- `docs/ARCHITECTURE.md`: controlled Agent design and authority boundaries.
+- `docs/THESIS_AGENT_DEMO.md`: step-by-step professor demonstration.
 
 ## Run the baseline evaluation
 

@@ -7,6 +7,7 @@ import requests
 import json
 from pathlib import Path
 from datetime import datetime
+from dataclasses import asdict
 import time
 import os
 import sys
@@ -30,7 +31,7 @@ from src.layer_alterator_agent.reference_loader import (
     load_reference_table,
     get_predictor_values,
 )
-from src.agent.schemas import AgentStage, AgentState, Intent
+from src.agent.schemas import AgentStage, AgentState, Intent, TypologyProposal
 from src.agent.intent_router import route_intent
 from src.agent.state_machine import (
     clarify_proposal,
@@ -39,9 +40,43 @@ from src.agent.state_machine import (
     register_vector,
     revise_proposal,
     set_proposal,
+    confirm_multi_plan,
+    undo_last_decision,
+    add_constraint,
 )
 from src.agent.typology_resolver import propose_typology
-from src.layer_alterator.service import run_c1_layer_alterator
+from src.agent.goal_reasoner import recommend_for_goal
+from src.agent.conversation_controller import ConversationController, explain_grounded_choice
+from src.agent.flexible_dialogue import (
+    format_plan_status,
+    is_natural_confirmation,
+    resolve_natural_selection,
+)
+from src.agent.elicitation import RequirementElicitationLoop, check_completeness
+from src.agent.llm_requirements import (
+    apply_extraction,
+    build_dynamic_question_prompt,
+    extract_with_fallback,
+)
+from src.agent.proposal_engine import (
+    build_complete_proposal,
+    explain_scenario_comparison,
+    format_complete_proposal,
+)
+from src.agent.requirements import PlanningRequirement, requirement_to_description
+from src.agent.execution_manager import validate_raster_outputs, recommend_replanning
+from src.layer_alterator.simulation_runner import run_layer_alterator
+from src.web.workspace_helpers import (
+    add_delivery_bundle,
+    generation_checklist,
+    mark_unchanged,
+    polygon_rows,
+    workflow_progress,
+)
+from src.web.task_store import (
+    delete_task, duplicate_task, list_tasks, load_task, new_task,
+    rename_task, save_task, task_dir, title_from_goal,
+)
 
 
 LAYER_AGENT_SYSTEM_PROMPT = """
@@ -303,6 +338,17 @@ def recommend_urban_types_from_goal(user_goal: str):
         "goal": "Unclear",
         "recommended_types": [],
         "explanation": "The system cannot confidently identify the transformation goal yet."
+    }
+
+
+def recommend_urban_types_from_goal(user_goal: str):
+    """Rank LCZ types from professor-provided predictor values."""
+    recommendation = recommend_for_goal(user_goal)
+    return {
+        "goal": recommendation.goal,
+        "recommended_types": recommendation.ranked_types,
+        "scores": recommendation.scores,
+        "explanation": recommendation.explanation,
     }
 
 
@@ -734,7 +780,7 @@ st.set_page_config(
     page_title="AI-assisted Urban Spatial Simulation System",
     page_icon="🌍",
     layout="wide",
-    initial_sidebar_state="collapsed",
+    initial_sidebar_state="expanded",
 )
 
 hide_streamlit_style = """
@@ -747,7 +793,13 @@ hide_streamlit_style = """
 
 /* 隐藏顶部 header */
 header {
-    visibility: hidden;
+    visibility: visible;
+    background: transparent !important;
+}
+
+[data-testid="stSidebarCollapsedControl"] {
+    display: flex !important;
+    visibility: visible !important;
 }
 
 /* 隐藏 footer */
@@ -785,10 +837,7 @@ st.markdown("""
         width: 8px;
         height: 8px;
     }
-    /* Stabilize sidebar layout */
-    [data-testid="stSidebar"] {
-        min-width: 300px;
-    }
+    /* A collapsed sidebar must release its layout width. */
 </style>
 """, unsafe_allow_html=True)
 
@@ -954,51 +1003,6 @@ def main():
 
 
 
-    # ---------- Page state ----------
-    if "current_page" not in st.session_state:
-        st.session_state.current_page = "Urban Simulation Assistant"
-
-    pages = [
-        "Urban Simulation Assistant",
-        "Simulation Workspace",
-        "Knowledge Explorer",
-        "System Configuration",
-    ]
-
-    # ---------- Floating top navigation ----------
-    top_space1, top_space2 = st.columns([5, 4])
-
-    with top_space2:
-
-        nav1, nav2, nav3, nav4 = st.columns(4)
-
-        nav_map = {
-            "Urban Simulation Assistant": "Assistant",
-            "Simulation Workspace": "Workspace",
-            "Knowledge Explorer": "Knowledge",
-            "System Configuration": "System",
-        }
-
-        for col, p in zip(
-                [nav1, nav2, nav3, nav4],
-                pages
-        ):
-
-            with col:
-
-                if st.button(
-                        nav_map[p],
-                        key=f"top_nav_{p}",
-                        use_container_width=True,
-                        type="primary" if st.session_state.current_page == p else "secondary",
-                ):
-                    st.session_state.current_page = p
-                    st.rerun()
-
-    # ---------- Minimal sidebar ----------
-
-    # ---------- Top navigation ----------
-
     # ---------- Hero header ----------
     st.markdown("""
     <div style="
@@ -1014,7 +1018,7 @@ def main():
     font-size:1.7rem;
     color:#111827;
     ">
-    AI-assisted Urban Spatial Simulation System
+    Urban Layer Agent
     </h1>
 
     <p style="
@@ -1022,14 +1026,12 @@ def main():
     color:#4b5563;
     font-size:0.95rem;
     ">
-    Conversational GeoAI Interface for Urban Transformation Simulation
+    Conversational preparation of Layer Alterator simulation inputs
     </p>
 
     </div>
     """, unsafe_allow_html=True)
 
-
-    page = st.session_state.current_page
     st.divider()
 
     # ---------- Initialize RAG engine ----------
@@ -1048,15 +1050,7 @@ def main():
                     st.error("System startup failed, please check configuration.")
         return
 
-    # ---------- Render page ----------
-    if page == "Urban Simulation Assistant":
-        show_layer_alterator_agent_page()
-    elif page == "Simulation Workspace":
-        show_file_management_page()
-    elif page == "Knowledge Explorer":
-        show_search_page()
-    elif page == "System Configuration":
-        show_settings_page()
+    show_layer_alterator_agent_page()
 
 def show_chat_page():
     """Q&A Page"""
@@ -1549,7 +1543,7 @@ def show_gis_visualization_dialog():
     except Exception as e:
         st.error(f"Visualization failed: {e}")
 
-def show_vector_map(gdf, matched_type_column=None):
+def show_vector_map(gdf, matched_type_column=None, id_column=None):
     """
     Display vector polygons with polygon labels and optional simulation result colors.
     Click interaction is disabled to avoid Leaflet focus rectangle.
@@ -1561,8 +1555,18 @@ def show_vector_map(gdf, matched_type_column=None):
 
         gdf_map = gdf.copy()
 
-        if "polygon_id" not in gdf_map.columns:
-            gdf_map["polygon_id"] = range(1, len(gdf_map) + 1)
+        if id_column and id_column in gdf_map.columns:
+            label_column = id_column
+        elif "polygon_id" in gdf_map.columns and gdf_map["polygon_id"].notna().all():
+            label_column = "polygon_id"
+        else:
+            label_column = next(
+                (name for name in ["fid", "id", "name"] if name in gdf_map.columns),
+                None,
+            )
+        if label_column is None:
+            label_column = "_display_polygon_id"
+            gdf_map[label_column] = range(1, len(gdf_map) + 1)
 
         if gdf_map.crs and str(gdf_map.crs) != "EPSG:4326":
             gdf_map = gdf_map.to_crs("EPSG:4326")
@@ -1628,7 +1632,7 @@ def show_vector_map(gdf, matched_type_column=None):
         # Add polygon labels
         for _, row in gdf_map.iterrows():
             point = row.geometry.representative_point()
-            polygon_id = row["polygon_id"]
+            polygon_id = row[label_column]
 
             folium.Marker(
                 location=[point.y, point.x],
@@ -1746,11 +1750,200 @@ def show_layer_alterator_agent_page():
         "la_ucp_folder": "",
         "la_fractions_folder": "",
         "la_pending_batch": None,
+        "la_upload_widget_had_file": False,
+        "la_restore_warning": "",
     }
 
     for key, value in defaults.items():
         if key not in st.session_state:
             st.session_state[key] = value
+
+    tasks_root = settings.PROJECT_ROOT / "data" / "tasks"
+    tasks_root.mkdir(parents=True, exist_ok=True)
+
+    def task_snapshot():
+        state = st.session_state.la_agent_state
+        current_id = st.session_state.la_current_task_id
+        existing = load_task(tasks_root, current_id)
+        title = existing.get("title", "New urban planning task")
+        if title == "New urban planning task" and st.session_state.la_global_goal:
+            title = title_from_goal(st.session_state.la_global_goal)
+        return {
+            **existing,
+            "title": title,
+            "messages": st.session_state.la_chat_history,
+            "vector_path": st.session_state.la_vector_path,
+            "vector_name": st.session_state.la_vector_name,
+            "id_column": st.session_state.la_id_column,
+            "polygon_ids": st.session_state.la_polygon_ids,
+            "goal": st.session_state.la_global_goal,
+            "decisions": {str(k): v for k, v in state.confirmed_decisions.items()},
+            "unchanged": list(state.unchanged_polygon_ids),
+            "stage": state.stage.value,
+            "pending_proposal": asdict(state.pending_proposal) if state.pending_proposal else None,
+            "active_requirement": (
+                state.active_requirement.to_dict() if state.active_requirement else None
+            ),
+            "outputs": st.session_state.la_generation_result or {},
+        }
+
+    def persist_current_task():
+        if st.session_state.get("la_current_task_id"):
+            save_task(tasks_root, task_snapshot())
+
+    def restore_task(task):
+        for key in defaults:
+            st.session_state[key] = AgentState() if key == "la_agent_state" else (
+                {} if key == "la_polygon_descriptions" else
+                [] if key in {"la_chat_history", "la_polygon_ids", "la_scenario_candidates"} else
+                None if key in {"la_vector_path", "la_vector_name", "la_gdf",
+                                "la_id_column", "la_generation_result",
+                                "la_selected_scenario", "la_last_recommendation",
+                                "la_pending_user_message", "la_layer_alterator_result",
+                                "la_pending_batch"} else defaults[key]
+            )
+        st.session_state.la_chat_history = task.get("messages", [])
+        st.session_state.la_vector_path = task.get("vector_path")
+        st.session_state.la_vector_name = task.get("vector_name")
+        st.session_state.la_id_column = task.get("id_column")
+        st.session_state.la_polygon_ids = task.get("polygon_ids", [])
+        st.session_state.la_global_goal = task.get("goal", "")
+        decisions = {int(k): v for k, v in task.get("decisions", {}).items()}
+        unchanged = task.get("unchanged", [])
+        restored_outputs = task.get("outputs") or {}
+        output_vector = restored_outputs.get("updated_vector_path")
+        outputs_available = bool(output_vector and Path(output_vector).exists())
+        if restored_outputs and not outputs_available:
+            restored_outputs = {}
+            st.session_state.la_restore_warning = (
+                "Saved generated files are missing. Planning decisions were "
+                "restored; run Generate again."
+            )
+        restored_stage = task.get("stage", AgentStage.WAITING_FOR_VECTOR.value)
+        if not outputs_available and restored_stage in {
+            AgentStage.INPUTS_GENERATED.value,
+            AgentStage.RUNNING_LAYER_ALTERATOR.value,
+            AgentStage.COMPLETED.value,
+        }:
+            restored_stage = AgentStage.READY_TO_GENERATE.value
+        state = AgentState(
+            stage=AgentStage(restored_stage),
+            vector_path=task.get("vector_path"),
+            id_column=task.get("id_column"),
+            polygon_ids=task.get("polygon_ids", []),
+            overall_goal=task.get("goal", ""),
+            confirmed_decisions=decisions,
+            unchanged_polygon_ids=unchanged,
+            outputs=restored_outputs,
+        )
+        if task.get("pending_proposal"):
+            state.pending_proposal = TypologyProposal(**task["pending_proposal"])
+        if task.get("active_requirement"):
+            state.active_requirement = PlanningRequirement(**task["active_requirement"])
+        st.session_state.la_agent_state = state
+        st.session_state.la_stage = restored_stage
+        st.session_state.la_polygon_descriptions = dict(decisions)
+        st.session_state.la_generation_result = restored_outputs or None
+        if task.get("vector_path") and Path(task["vector_path"]).exists():
+            st.session_state.la_gdf = load_vector(task["vector_path"])
+        st.session_state.la_loaded_task_id = task["task_id"]
+
+    if "la_current_task_id" not in st.session_state:
+        tasks = list_tasks(tasks_root)
+        task = tasks[0] if tasks else new_task(tasks_root)
+        st.session_state.la_current_task_id = task["task_id"]
+    if st.session_state.get("la_loaded_task_id") != st.session_state.la_current_task_id:
+        restore_task(load_task(tasks_root, st.session_state.la_current_task_id))
+
+    with st.sidebar:
+        st.markdown("## Urban Layer Agent")
+        st.caption("Independent planning tasks")
+        with st.expander("+ Create new task"):
+            if st.session_state.pop("clear_new_task_name", False):
+                st.session_state.new_task_name = ""
+            new_task_name = st.text_input(
+                "Task name",
+                placeholder="e.g. Urban heat and recreation",
+                key="new_task_name",
+            )
+            if st.button(
+                "Create task",
+                type="primary",
+                use_container_width=True,
+                disabled=not bool(new_task_name.strip()),
+            ):
+                persist_current_task()
+                task = new_task(tasks_root, new_task_name.strip())
+                st.session_state.la_current_task_id = task["task_id"]
+                st.session_state.clear_new_task_name = True
+                st.rerun()
+        tasks = list_tasks(tasks_root)
+        labels = {item["task_id"]: item.get("title", "Untitled") for item in tasks}
+        st.markdown("### History")
+        for item in tasks:
+            task_id = item["task_id"]
+            active = task_id == st.session_state.la_current_task_id
+            try:
+                updated = datetime.fromisoformat(
+                    str(item.get("updated_at", ""))
+                ).astimezone().strftime("%Y-%m-%d %H:%M")
+            except ValueError:
+                updated = "unknown"
+            if st.button(
+                f"{'●' if active else '○'} {item.get('title', 'Untitled')}",
+                key=f"open_task_{task_id}",
+                type="primary" if active else "secondary",
+                use_container_width=True,
+                disabled=active,
+                help=f"Last updated: {updated}",
+            ):
+                persist_current_task()
+                st.session_state.la_current_task_id = task_id
+                st.rerun()
+            st.caption(f"Updated {updated or 'unknown'}")
+        st.divider()
+        st.markdown("### Current task")
+        task_title = st.text_input(
+            "Rename current task",
+            value=labels.get(st.session_state.la_current_task_id, "Untitled"),
+            key=f"rename_{st.session_state.la_current_task_id}",
+        )
+        controls = st.columns(2)
+        if controls[0].button("Rename", use_container_width=True):
+            rename_task(tasks_root, st.session_state.la_current_task_id, task_title)
+            st.rerun()
+        if controls[1].button("Duplicate", use_container_width=True):
+            persist_current_task()
+            copy = duplicate_task(tasks_root, st.session_state.la_current_task_id)
+            st.session_state.la_current_task_id = copy["task_id"]
+            st.rerun()
+        with st.expander("System info"):
+            st.write(f"**Task ID:** `{st.session_state.la_current_task_id}`")
+            st.write(f"**Reference table:** {'Ready' if reference_table_path.exists() else 'Missing'}")
+            st.write(f"**Model:** {'Ready' if st.session_state.rag_engine else 'Unavailable'}")
+            st.write(f"**Stage:** {st.session_state.la_agent_state.stage.value}")
+            st.write(f"**Output folder:** `{task_dir(tasks_root, st.session_state.la_current_task_id)}`")
+        with st.expander("Help"):
+            st.write("Upload → Goal → Plan polygons → Confirm → Generate → Simulate")
+        with st.expander("Delete current task"):
+            current_title = labels.get(st.session_state.la_current_task_id, "Untitled")
+            st.warning(f"This permanently deletes “{current_title}” and its files.")
+            delete_confirmation = st.text_input(
+                "Type DELETE to confirm",
+                key=f"delete_confirm_{st.session_state.la_current_task_id}",
+            )
+            if st.button(
+                "Delete permanently",
+                type="primary",
+                disabled=delete_confirmation != "DELETE",
+                use_container_width=True,
+            ):
+                current = st.session_state.la_current_task_id
+                delete_task(tasks_root, current)
+                remaining = list_tasks(tasks_root)
+                replacement = remaining[0] if remaining else new_task(tasks_root)
+                st.session_state.la_current_task_id = replacement["task_id"]
+                st.rerun()
 
     def add_message(role, content=None, msg_type="text"):
         st.session_state.la_chat_history.append({
@@ -1758,11 +1951,12 @@ def show_layer_alterator_agent_page():
             "content": content,
             "type": msg_type,
         })
+        persist_current_task()
 
     def reset_agent():
-        for key in defaults.keys():
-            if key in st.session_state:
-                del st.session_state[key]
+        persist_current_task()
+        task = new_task(tasks_root)
+        st.session_state.la_current_task_id = task["task_id"]
         st.rerun()
 
 
@@ -1776,6 +1970,214 @@ def show_layer_alterator_agent_page():
 
         agent_state = st.session_state.la_agent_state
         safe_intent = route_intent(user_text)
+        controller_result = ConversationController().interpret(user_text, agent_state)
+
+        for constraint in controller_result.interpretation.constraints:
+            add_constraint(agent_state, constraint)
+
+        # The LLM may phrase a question and extract semantics, but the validated
+        # requirement model and reference tables remain the source of truth.
+        elicitation = RequirementElicitationLoop(
+            question_generator=lambda requirement, topic: run_llm_once(
+                build_dynamic_question_prompt(requirement, topic)
+            )
+        )
+
+        if agent_state.active_requirement is not None and safe_intent.intent != Intent.SET_POLYGON:
+            requirement = agent_state.active_requirement
+            extraction = extract_with_fallback(requirement, user_text, run_llm_once)
+            if extraction and extraction["confidence"] >= 0.55:
+                requirement = apply_extraction(requirement, extraction)
+            # Deterministic parsing is deliberately retained as a safe fallback
+            # and to capture exact domain keywords.
+            requirement = elicitation.answer(requirement, user_text)
+            question = elicitation.next_question(requirement)
+            if question:
+                add_message("assistant", question)
+                return
+            completeness = check_completeness(requirement)
+            if completeness.conflicts:
+                add_message(
+                    "assistant",
+                    "I found a conflict that must be resolved:\n\n"
+                    + "\n".join(f"- {item}" for item in completeness.conflicts),
+                )
+                return
+            complete = build_complete_proposal(
+                requirement,
+                lambda urban_type: get_predictor_values(reference_df, urban_type),
+            )
+            agent_state.complete_proposals[requirement.polygon_id] = complete
+            leading_type = complete.scenarios[0].candidate.urban_type
+            proposal = propose_typology(
+                requirement.polygon_id,
+                leading_type,
+                requirement.constraints,
+            )
+            proposal.candidate_types = [
+                scenario.candidate.urban_type for scenario in complete.scenarios
+            ]
+            proposal.predictor_values = get_predictor_values(reference_df, leading_type)
+            proposal.candidate_evidence = complete.scenarios[0].candidate.evidence
+            set_proposal(agent_state, proposal)
+            agent_state.active_requirement = None
+            add_message("assistant", format_complete_proposal(complete))
+            return
+
+        if safe_intent.intent == Intent.SET_POLYGON and safe_intent.polygon_id in agent_state.polygon_ids:
+            initial_description = safe_intent.target_description or user_text
+            initial_proposal = propose_typology(
+                safe_intent.polygon_id, initial_description, agent_state.constraints
+            )
+            if initial_proposal.needs_clarification:
+                requirement = elicitation.start(
+                    safe_intent.polygon_id,
+                    initial_description,
+                    st.session_state.la_global_goal,
+                )
+                agent_state.active_requirement = requirement
+                question = elicitation.next_question(requirement)
+                if question:
+                    add_message("assistant", question)
+                    return
+
+        if controller_result.kind == "undo":
+            try:
+                undo_last_decision(agent_state)
+                st.session_state.la_polygon_descriptions = dict(agent_state.confirmed_decisions)
+                add_message(
+                    "assistant",
+                    "The last confirmed change was undone.\n\n"
+                    + format_plan_status(
+                        st.session_state.la_global_goal,
+                        agent_state.confirmed_decisions,
+                        agent_state.constraints,
+                        agent_state.unchanged_polygon_ids,
+                    ),
+                )
+            except ValueError as exc:
+                add_message("assistant", str(exc))
+            return
+
+        if controller_result.kind == "status":
+            add_message(
+                "assistant",
+                format_plan_status(
+                    st.session_state.la_global_goal,
+                    agent_state.confirmed_decisions,
+                    agent_state.constraints,
+                    agent_state.unchanged_polygon_ids,
+                ),
+            )
+            return
+
+        if controller_result.kind == "explain" and agent_state.pending_proposal:
+            complete = agent_state.complete_proposals.get(
+                agent_state.pending_proposal.polygon_id
+            )
+            add_message(
+                "assistant",
+                explain_scenario_comparison(complete, user_text)
+                if complete
+                else explain_grounded_choice(agent_state.pending_proposal, user_text),
+            )
+            return
+
+        if controller_result.kind == "explain" and agent_state.pending_multi_plan:
+            explanations = [
+                explain_grounded_choice(proposal, user_text)
+                for _, proposal in sorted(agent_state.pending_multi_plan.items())
+            ]
+            add_message("assistant", "\n\n---\n\n".join(explanations))
+            return
+
+        if controller_result.kind == "confirm_all" and agent_state.pending_multi_plan:
+            confirm_multi_plan(agent_state)
+            for polygon_id, urban_type in agent_state.confirmed_decisions.items():
+                st.session_state.la_polygon_descriptions[polygon_id] = urban_type
+            add_message(
+                "assistant",
+                "The complete multi-polygon plan was confirmed.\n\n"
+                + format_plan_status(
+                    st.session_state.la_global_goal,
+                    agent_state.confirmed_decisions,
+                    agent_state.constraints,
+                    agent_state.unchanged_polygon_ids,
+                ),
+            )
+            return
+
+        if controller_result.kind == "multi_plan":
+            agent_state.pending_multi_plan = controller_result.proposals
+            agent_state.pending_unchanged_polygon_ids = sorted(
+                set(controller_result.keep_unchanged)
+            )
+            lines = ["I interpreted your request as:", ""]
+            for polygon_id, proposal in sorted(controller_result.proposals.items()):
+                if proposal.recommended_type:
+                    lines.append(
+                        f"- Polygon {polygon_id} → **{proposal.recommended_type}** "
+                        f"(from: {proposal.original_description})"
+                    )
+                else:
+                    lines.append(
+                        f"- Polygon {polygon_id}: needs a choice between "
+                        f"{', '.join(proposal.candidate_types)}"
+                    )
+            for polygon_id in controller_result.keep_unchanged:
+                lines.append(f"- Polygon {polygon_id} → unchanged")
+            if controller_result.warnings:
+                lines.extend(["", "Warnings:"] + [f"- {item}" for item in controller_result.warnings])
+            unresolved = [p for p in controller_result.proposals.values() if not p.recommended_type]
+            if unresolved:
+                lines.extend(["", "Please specify the unresolved polygon type before confirming."])
+            else:
+                lines.extend(["", "Say `Confirm all` to accept, or describe a polygon again to modify it."])
+            add_message("assistant", "\n".join(lines))
+            return
+
+        if agent_state.pending_multi_plan and safe_intent.intent == Intent.SET_POLYGON:
+            polygon_id = safe_intent.polygon_id
+            description = safe_intent.target_description
+            if polygon_id in agent_state.polygon_ids and description:
+                proposal = propose_typology(polygon_id, description, agent_state.constraints)
+                agent_state.pending_multi_plan[polygon_id] = proposal
+                if proposal.recommended_type:
+                    add_message(
+                        "assistant",
+                        f"Updated the pending plan: Polygon {polygon_id} → "
+                        f"**{proposal.recommended_type}**.\n\n"
+                        "Say `Confirm all` when the complete plan is ready.",
+                    )
+                else:
+                    add_message("assistant", proposal.clarification_question)
+                return
+
+        def replace_pending_polygon_request():
+            """Treat a complete Polygon command as a new proposal, not an answer to the old one."""
+            if safe_intent.intent != Intent.SET_POLYGON:
+                return False
+            polygon_id = safe_intent.polygon_id
+            description = safe_intent.target_description
+            if polygon_id not in st.session_state.la_polygon_ids or not description:
+                return False
+            proposal = propose_typology(polygon_id, description, agent_state.constraints)
+            set_proposal(agent_state, proposal)
+            if proposal.needs_clarification:
+                add_message("assistant", proposal.clarification_question)
+            else:
+                proposal.predictor_values = get_predictor_values(
+                    reference_df, proposal.recommended_type
+                )
+                add_message(
+                    "assistant",
+                    (
+                        f"Proposed type for Polygon {polygon_id}: "
+                        f"**{proposal.recommended_type}**\n\n"
+                        "Type `Confirm` to accept or `Revise` to choose again."
+                    ),
+                )
+            return True
 
         if st.session_state.la_pending_batch:
             batch = st.session_state.la_pending_batch
@@ -1799,10 +2201,14 @@ def show_layer_alterator_agent_page():
             return
 
         if agent_state.stage == AgentStage.WAITING_FOR_CLARIFICATION:
+            if replace_pending_polygon_request():
+                return
             proposal = agent_state.pending_proposal
-            selected_type = next(
-                (item for item in proposal.candidate_types if item.lower() in user_text.lower()),
-                None,
+            candidate_scores = recommend_for_goal(
+                st.session_state.la_global_goal
+            ).scores if st.session_state.la_global_goal else {}
+            selected_type = resolve_natural_selection(
+                user_text, proposal.candidate_types, candidate_scores
             )
             if not selected_type:
                 add_message("assistant", proposal.clarification_question)
@@ -1820,8 +2226,29 @@ def show_layer_alterator_agent_page():
             return
 
         if agent_state.stage == AgentStage.WAITING_FOR_CONFIRMATION:
+            if replace_pending_polygon_request():
+                return
             proposal = agent_state.pending_proposal
-            if safe_intent.intent == Intent.CONFIRM:
+            selected_type = resolve_natural_selection(
+                user_text,
+                proposal.candidate_types,
+                recommend_for_goal(st.session_state.la_global_goal).scores
+                if st.session_state.la_global_goal else {},
+            )
+            if (
+                selected_type
+                and selected_type != proposal.recommended_type
+                and safe_intent.intent != Intent.CONFIRM
+            ):
+                proposal.recommended_type = selected_type
+                proposal.predictor_values = get_predictor_values(reference_df, selected_type)
+                add_message(
+                    "assistant",
+                    f"Updated proposal: Polygon {proposal.polygon_id} → "
+                    f"**{selected_type}**.\n\nSay `Confirm` to accept it.",
+                )
+                return
+            if safe_intent.intent == Intent.CONFIRM or is_natural_confirmation(user_text):
                 confirm_proposal(agent_state)
                 st.session_state.la_polygon_descriptions[proposal.polygon_id] = proposal.recommended_type
                 st.session_state.la_before_after_df = build_before_after_table(
@@ -1958,7 +2385,7 @@ def show_layer_alterator_agent_page():
                 return
 
             try:
-                proposal = propose_typology(pid, desc)
+                proposal = propose_typology(pid, desc, agent_state.constraints)
                 set_proposal(agent_state, proposal)
                 if proposal.needs_clarification:
                     add_message("assistant", proposal.clarification_question)
@@ -2038,16 +2465,19 @@ def show_layer_alterator_agent_page():
                 return
 
             try:
+                current_task_folder = task_dir(
+                    tasks_root, st.session_state.la_current_task_id
+                )
                 result = generate_layer_alterator_inputs(
                     vector_path=st.session_state.la_vector_path,
                     reference_table_path=str(reference_table_path),
                     polygon_descriptions=st.session_state.la_polygon_descriptions,
                     id_column=st.session_state.la_id_column,
-                    output_dir=str(settings.PROJECT_ROOT / "data" / "layer_alterator_outputs"),
+                    output_dir=str(current_task_folder / "inputs"),
                 )
 
                 explanation_path = write_simulation_explanation_md(
-                    output_dir=str(settings.PROJECT_ROOT / "data" / "layer_alterator_outputs"),
+                    output_dir=str(current_task_folder / "inputs"),
                     global_goal=st.session_state.la_global_goal,
                     selected_scenario=st.session_state.la_selected_scenario,
                     polygon_descriptions=st.session_state.la_polygon_descriptions,
@@ -2056,6 +2486,7 @@ def show_layer_alterator_agent_page():
                 )
 
                 result["explanation_path"] = explanation_path
+                result = add_delivery_bundle(result)
 
                 st.session_state.la_generation_result = result
                 st.session_state.la_stage = "generated"
@@ -2064,6 +2495,7 @@ def show_layer_alterator_agent_page():
                     key: value for key, value in result.items()
                     if key.endswith("_path") and isinstance(value, str)
                 }
+                persist_current_task()
 
                 add_message("assistant", msg_type="generation_result")
 
@@ -2095,6 +2527,30 @@ def show_layer_alterator_agent_page():
         st.session_state.la_stage = "free_chat"
         return
 
+    # ---------- Guided workspace header ----------
+    workflow_flags = [
+        bool(st.session_state.la_vector_path),
+        bool(st.session_state.la_global_goal),
+        bool(st.session_state.la_agent_state.confirmed_decisions)
+        or bool(st.session_state.la_agent_state.unchanged_polygon_ids),
+        st.session_state.la_agent_state.stage == AgentStage.READY_TO_GENERATE,
+        bool(st.session_state.la_generation_result),
+        bool(st.session_state.la_layer_alterator_result),
+    ]
+    workflow_labels = ["1 Upload", "2 Goal", "3 Plan", "4 Review", "5 Generate", "6 Simulate"]
+    step_columns = st.columns(6)
+    for index, (column, label) in enumerate(zip(step_columns, workflow_labels)):
+        with column:
+            if workflow_flags[index]:
+                st.success(f"✓ {label}")
+            elif not any(workflow_flags[index:]):
+                st.info(f"● {label}")
+            else:
+                st.caption(f"○ {label}")
+    if st.session_state.la_restore_warning:
+        st.warning(st.session_state.la_restore_warning)
+        st.session_state.la_restore_warning = ""
+
     # ---------- Layout ----------
     context_col, chat_col, preview_col = st.columns([1.05, 2.2, 1.35], gap="medium")
 
@@ -2106,9 +2562,7 @@ def show_layer_alterator_agent_page():
         # =========================================================
         # Input Vector
         # =========================================================
-        with st.container(border=True):
-            st.markdown("##### Input Vector")
-
+        with st.expander("Input Vector", expanded=not bool(st.session_state.la_vector_path)):
             uploaded_vector = st.file_uploader(
                 "Upload polygon vector",
                 type=["geojson", "gpkg", "shp"],
@@ -2116,11 +2570,45 @@ def show_layer_alterator_agent_page():
                 key="layer_agent_vector_upload_v32",
             )
 
+        # The uploader's X button must clear vector-dependent task state.
+        # A restored historical task does not trigger this branch because its
+        # uploader flag starts false.
+        if (
+            uploaded_vector is None
+            and st.session_state.la_upload_widget_had_file
+        ):
+            st.session_state.la_upload_widget_had_file = False
+            st.session_state.la_vector_path = None
+            st.session_state.la_vector_name = None
+            st.session_state.la_gdf = None
+            st.session_state.la_polygon_ids = []
+            st.session_state.la_id_column = None
+            st.session_state.la_polygon_descriptions = {}
+            st.session_state.la_generation_result = None
+            st.session_state.la_layer_alterator_result = None
+            st.session_state.la_before_after_df = pd.DataFrame()
+            state = st.session_state.la_agent_state
+            state.vector_path = None
+            state.id_column = None
+            state.polygon_ids = []
+            state.confirmed_decisions = {}
+            state.unchanged_polygon_ids = []
+            state.pending_proposal = None
+            state.active_requirement = None
+            state.outputs = {}
+            state.stage = AgentStage.WAITING_FOR_VECTOR
+            st.session_state.la_stage = "waiting_for_vector"
+            persist_current_task()
+            st.rerun()
+
         if (
                 uploaded_vector is not None
                 and st.session_state.la_vector_name != uploaded_vector.name
         ):
-            vector_save_dir = settings.VECTOR_DATA_DIR
+            st.session_state.la_upload_widget_had_file = True
+            vector_save_dir = (
+                task_dir(tasks_root, st.session_state.la_current_task_id) / "source"
+            )
             vector_save_dir.mkdir(parents=True, exist_ok=True)
 
             vector_path = vector_save_dir / uploaded_vector.name
@@ -2184,9 +2672,7 @@ def show_layer_alterator_agent_page():
         # =========================================================
         # Workflow Progress
         # =========================================================
-        with st.container(border=True):
-
-            st.markdown("##### Workflow Progress")
+        with st.expander("Workflow Progress", expanded=True):
 
             has_vector = (
                     st.session_state.la_vector_path is not None
@@ -2204,11 +2690,19 @@ def show_layer_alterator_agent_page():
                 pid
                 for pid, desc in st.session_state.la_polygon_descriptions.items()
                 if str(desc).strip()
+            ]) + len([
+                pid for pid in st.session_state.la_agent_state.unchanged_polygon_ids
+                if pid not in st.session_state.la_polygon_descriptions
             ])
 
+            decided_ids = {
+                pid for pid, desc in st.session_state.la_polygon_descriptions.items()
+                if str(desc).strip()
+            }
+            unchanged_ids = set(st.session_state.la_agent_state.unchanged_polygon_ids)
             has_all_polygons = (
-                    total > 0
-                    and completed == total
+                total > 0
+                and decided_ids | unchanged_ids == set(st.session_state.la_polygon_ids)
             )
 
             has_outputs = (
@@ -2216,16 +2710,13 @@ def show_layer_alterator_agent_page():
                     is not None
             )
 
-            progress_steps = [
+            progress_steps, progress_value = workflow_progress(
                 has_vector,
                 has_goal,
-                has_all_polygons,
+                st.session_state.la_polygon_ids,
+                st.session_state.la_polygon_descriptions,
+                st.session_state.la_agent_state.unchanged_polygon_ids,
                 has_outputs,
-            ]
-
-            progress_value = (
-                    sum(progress_steps)
-                    / len(progress_steps)
             )
 
             st.progress(progress_value)
@@ -2261,9 +2752,7 @@ def show_layer_alterator_agent_page():
         # =========================================================
         # Current Context
         # =========================================================
-        with st.container(border=True):
-
-            st.markdown("##### Current Context")
+        with st.expander("Current Context", expanded=False):
 
             if has_vector:
                 st.write(
@@ -2293,90 +2782,51 @@ def show_layer_alterator_agent_page():
                 )
 
         # =========================================================
-        # Reset Assistant
+        # Verifiable Agent Evidence (not hidden chain-of-thought)
         # =========================================================
-        with st.container(border=True):
-
-            st.markdown("##### Assistant Control")
-
-            if st.button(
-                    "Reset Assistant",
-                    type="secondary",
-                    use_container_width=True
-            ):
-                reset_agent()
-
-        # =========================================================
-        # Generated Outputs
-        # =========================================================
-        with st.container(border=True):
-
-            st.markdown("##### Generated Outputs")
-
-            result = st.session_state.la_generation_result
-
-            if result:
-
-                with open(
-                        result["updated_vector_path"],
-                        "rb"
-                ) as f:
-
-                    st.download_button(
-                        "Download updated_vector.geojson",
-                        data=f,
-                        file_name="updated_vector.geojson",
-                        mime="application/geo+json",
-                        use_container_width=True,
-                    )
-
-                with open(
-                        result["rules_path"],
-                        "rb"
-                ) as f:
-
-                    st.download_button(
-                        "Download rules.json",
-                        data=f,
-                        file_name="rules.json",
-                        mime="application/json",
-                        use_container_width=True,
-                    )
-
-                with open(
-                        result["config_path"],
-                        "rb"
-                ) as f:
-
-                    st.download_button(
-                        "Download simulation_config.json",
-                        data=f,
-                        file_name="simulation_config.json",
-                        mime="application/json",
-                        use_container_width=True,
-                    )
-
-                if result.get("explanation_path"):
-                    with open(
-                            result["explanation_path"],
-                            "rb"
-                    ) as f:
-                        st.download_button(
-                            "Download simulation_explanation.md",
-                            data=f,
-                            file_name="simulation_explanation.md",
-                            mime="text/markdown",
-                            use_container_width=True,
-                        )
-
-            else:
-                st.caption(
-                    "Generated files will appear here."
+        with st.expander("Agent Evidence", expanded=False):
+            evidence_state = st.session_state.la_agent_state
+            if evidence_state.active_requirement is not None:
+                requirement = evidence_state.active_requirement
+                completeness = check_completeness(requirement)
+                st.write(f"**Requirement interview:** Polygon {requirement.polygon_id}")
+                st.write(
+                    f"**Captured:** typology={requirement.planning_typology}, "
+                    f"function={requirement.primary_function}, "
+                    f"vegetation={requirement.vegetation_preference}, "
+                    f"openness={requirement.openness_preference}"
                 )
+                st.write(
+                    f"**Still needed:** "
+                    f"{', '.join(completeness.missing_fields) or 'nothing'}"
+                )
+            elif evidence_state.pending_proposal:
+                proposal = evidence_state.pending_proposal
+                st.write(f"**Detected typology:** {proposal.planning_typology or 'explicit LCZ type'}")
+                st.write(f"**Candidate order:** {', '.join(proposal.candidate_types)}")
+                if proposal.candidate_evidence:
+                    with st.expander("Reference-table matches"):
+                        for item in proposal.candidate_evidence:
+                            st.write(f"- {item}")
+            elif evidence_state.pending_multi_plan:
+                st.write("**Pending multi-polygon plan**")
+                for polygon_id, proposal in sorted(evidence_state.pending_multi_plan.items()):
+                    st.write(
+                        f"- Polygon {polygon_id}: "
+                        f"{proposal.recommended_type or ', '.join(proposal.candidate_types)}"
+                    )
+            else:
+                st.caption("No proposal is currently waiting for review.")
+            if evidence_state.constraints:
+                st.write(f"**Active constraints:** {', '.join(evidence_state.constraints)}")
+            if evidence_state.tool_history:
+                with st.expander("Tools used"):
+                    for item in evidence_state.tool_history[-8:]:
+                        st.write(f"- {item.get('tool', 'unknown tool')}")
 
-        with st.container(border=True):
-            st.markdown("##### Run C1 Layer Alterator")
-            st.caption("Available after the vector and rules files have been generated.")
+        result = st.session_state.la_generation_result
+        with st.expander("Run Layer Alterator", expanded=False):
+            st.caption("Automatically validates and routes C0, C1, C2, or C3 rules.")
             st.session_state.la_ucp_folder = st.text_input(
                 "UCP raster folder",
                 value=st.session_state.la_ucp_folder,
@@ -2387,26 +2837,62 @@ def show_layer_alterator_agent_page():
                 value=st.session_state.la_fractions_folder,
                 placeholder="Folder containing the seven F_*.tif layers",
             )
-            if st.button("Run C1 Layer Alterator", use_container_width=True, disabled=not bool(result)):
+            if st.button("Run Layer Alterator", use_container_width=True, disabled=not bool(result)):
                 try:
                     st.session_state.la_agent_state.stage = AgentStage.RUNNING_LAYER_ALTERATOR
-                    layer_result = run_c1_layer_alterator(
+                    layer_result = run_layer_alterator(
                         vector_mask_path=result["updated_vector_path"],
                         rules_path=result["rules_path"],
                         ucp_folder=st.session_state.la_ucp_folder,
                         fractions_folder=st.session_state.la_fractions_folder,
-                        output_folder=str(settings.PROJECT_ROOT / "data" / "layer_alterator_rasters"),
+                        output_folder=str(
+                            task_dir(tasks_root, st.session_state.la_current_task_id)
+                            / "rasters"
+                        ),
                     )
                     st.session_state.la_layer_alterator_result = layer_result
-                    st.session_state.la_agent_state.stage = AgentStage.COMPLETED
-                    st.success(f"Generated {len(layer_result.raster_outputs)} modified raster layers.")
+                    raster_validation = validate_raster_outputs(layer_result.raster_outputs)
+                    st.session_state.la_agent_state.tool_history.append({
+                        "tool": "validate_raster_outputs",
+                        "result": raster_validation.__dict__,
+                    })
+                    if raster_validation.valid:
+                        st.session_state.la_agent_state.stage = AgentStage.COMPLETED
+                        st.success(
+                            f"Simulation completed and {len(layer_result.raster_outputs)} "
+                            "raster outputs passed structural validation."
+                        )
+                        st.info(
+                            "C1 intentionally assigns one professor-reference value "
+                            "to every raster cell inside each polygon. Cells outside "
+                            "the polygons retain their original raster values."
+                        )
+                        for warning in raster_validation.warnings:
+                            st.warning(warning)
+                    else:
+                        st.session_state.la_agent_state.stage = AgentStage.ERROR
+                        st.error("Raster outputs were created but validation failed.")
+                        for recommendation in recommend_replanning(raster_validation):
+                            st.warning(recommendation)
                 except Exception as exc:
                     st.session_state.la_agent_state.stage = AgentStage.ERROR
                     st.session_state.la_agent_state.last_error = str(exc)
                     st.error(f"Layer Alterator failed: {exc}")
 
             if st.session_state.la_layer_alterator_result:
-                st.write(f"Output folder: `{st.session_state.la_layer_alterator_result.output_dir}`")
+                layer_output = st.session_state.la_layer_alterator_result
+                st.write(f"Output folder: `{layer_output.output_dir}`")
+                st.caption("Raster outputs can be dragged directly into QGIS.")
+                for raster_name, raster_path in layer_output.raster_outputs.items():
+                    with open(raster_path, "rb") as raster_file:
+                        st.download_button(
+                            f"Download {raster_name}.tif",
+                            raster_file,
+                            file_name=Path(raster_path).name,
+                            mime="image/tiff",
+                            key=f"download_raster_{raster_name}",
+                            use_container_width=True,
+                        )
     # ---------- Chat panel ----------
     with chat_col:
         st.subheader("Conversational Planning")
@@ -2451,6 +2937,7 @@ def show_layer_alterator_agent_page():
                                 show_vector_map(
                                     updated_gdf,
                                     matched_type_column="matched_urban_type",
+                                    id_column=st.session_state.la_id_column,
                                 )
 
                             except Exception as e:
@@ -2499,6 +2986,7 @@ def show_layer_alterator_agent_page():
                 "content": user_text,
                 "type": "text",
             })
+            persist_current_task()
             st.session_state.la_pending_user_message = user_text
             st.session_state.la_processing = True
             st.rerun()
@@ -2507,9 +2995,7 @@ def show_layer_alterator_agent_page():
         st.subheader("Spatial Preview")
         st.caption("Review the uploaded vector, generated outputs, and decision table.")
 
-        with st.container(border=True):
-            st.markdown("##### Map Preview")
-
+        with st.expander("Map", expanded=True):
             gdf = st.session_state.la_gdf
             result = st.session_state.la_generation_result
 
@@ -2524,6 +3010,7 @@ def show_layer_alterator_agent_page():
                     show_vector_map(
                         updated_gdf,
                         matched_type_column="matched_urban_type",
+                        id_column=st.session_state.la_id_column,
                     )
 
                 except Exception as e:
@@ -2531,7 +3018,7 @@ def show_layer_alterator_agent_page():
 
             elif gdf is not None:
                 st.caption("Uploaded vector preview")
-                show_vector_map(gdf)
+                show_vector_map(gdf, id_column=st.session_state.la_id_column)
 
             else:
                 st.info("Upload a polygon vector to see the map preview here.")
@@ -2553,37 +3040,126 @@ def show_layer_alterator_agent_page():
                     unsafe_allow_html=True,
                 )
 
-        with st.container(border=True):
-            st.markdown("##### Generated Outputs")
-
+        with st.expander("Results", expanded=bool(st.session_state.la_generation_result)):
             result = st.session_state.la_generation_result
 
             if result:
-                st.success("updated_vector.geojson")
-                st.success("rules.json")
-                st.success("simulation_config.json")
-
-                if result.get("explanation_path"):
-                    st.success("simulation_explanation.md")
+                st.success("Layer Alterator inputs are ready.")
+                if Path(result["updated_vector_path"]).exists():
+                    with open(result["updated_vector_path"], "rb") as output_file:
+                        st.download_button(
+                            "Download updated_vector.geojson",
+                            output_file,
+                            file_name="updated_vector.geojson",
+                            mime="application/geo+json",
+                            key="result_vector_download",
+                            use_container_width=True,
+                        )
+                if result.get("bundle_path") and Path(result["bundle_path"]).exists():
+                    with open(result["bundle_path"], "rb") as bundle_file:
+                        st.download_button(
+                            "Download complete result ZIP",
+                            bundle_file,
+                            file_name="urban_layer_agent_results.zip",
+                            mime="application/zip",
+                            key="result_bundle_download",
+                            use_container_width=True,
+                        )
+                with st.expander("Advanced files"):
+                    for path_key, label, mime in (
+                        ("rules_path", "rules.json", "application/json"),
+                        ("config_path", "simulation_config.json", "application/json"),
+                        ("explanation_path", "simulation_explanation.md", "text/markdown"),
+                        ("qml_path", "urban_layer_agent.qml", "application/xml"),
+                    ):
+                        path = result.get(path_key)
+                        if path and Path(path).exists():
+                            with open(path, "rb") as advanced_file:
+                                st.download_button(
+                                    f"Download {label}",
+                                    advanced_file,
+                                    file_name=label,
+                                    mime=mime,
+                                    key=f"result_advanced_{path_key}",
+                                    use_container_width=True,
+                                )
             else:
-                st.markdown(
-                    """
-                    <div style="
-                        min-height: 90px;
-                        display:flex;
-                        align-items:center;
-                        color:#9ca3af;
-                    ">
-                        No generated outputs yet.
-                    </div>
-                    """,
-                    unsafe_allow_html=True,
-                )
+                st.caption("No generated outputs yet.")
 
-        with st.container(border=True):
-            st.markdown("##### Data Preview")
-
+        with st.expander("Polygon Plan", expanded=False):
             gdf = st.session_state.la_gdf
+
+            if gdf is not None:
+                st.caption("Polygon decision workspace")
+                pending = st.session_state.la_agent_state.pending_proposal
+                rows = polygon_rows(
+                    gdf,
+                    st.session_state.la_id_column,
+                    st.session_state.la_agent_state.confirmed_decisions,
+                    st.session_state.la_agent_state.unchanged_polygon_ids,
+                    pending.polygon_id if pending else None,
+                )
+                workspace_df = pd.DataFrame(rows)
+                st.dataframe(workspace_df, width="stretch", hide_index=True)
+                selected_polygon = st.selectbox(
+                    "Selected polygon",
+                    st.session_state.la_polygon_ids,
+                    key="la_workspace_polygon",
+                )
+                quick_target = st.selectbox(
+                    "Quick target",
+                    ["Dense trees", "Scattered trees", "Low Plants", "Water"],
+                    key="la_workspace_target",
+                )
+                if st.button("Propose quick target", use_container_width=True):
+                    st.session_state.la_pending_user_message = (
+                        f"Polygon {selected_polygon} should become {quick_target}"
+                    )
+                    st.session_state.la_processing = True
+                    st.rerun()
+                action_columns = st.columns(3)
+                if action_columns[0].button("Plan / modify", use_container_width=True):
+                    add_message(
+                        "assistant",
+                        f"Describe what Polygon {selected_polygon} should become and I will clarify the requirements.",
+                    )
+                    st.rerun()
+                if action_columns[1].button("Keep unchanged", use_container_width=True):
+                    mark_unchanged(
+                        st.session_state.la_agent_state.unchanged_polygon_ids,
+                        selected_polygon,
+                    )
+                    st.session_state.la_agent_state.confirmed_decisions.pop(selected_polygon, None)
+                    st.session_state.la_polygon_descriptions.pop(selected_polygon, None)
+                    covered = (
+                        set(st.session_state.la_agent_state.confirmed_decisions)
+                        | set(st.session_state.la_agent_state.unchanged_polygon_ids)
+                    )
+                    if covered == set(st.session_state.la_polygon_ids):
+                        st.session_state.la_agent_state.stage = AgentStage.READY_TO_GENERATE
+                    persist_current_task()
+                    st.rerun()
+                if action_columns[2].button("Undo", use_container_width=True):
+                    try:
+                        undo_last_decision(st.session_state.la_agent_state)
+                        st.session_state.la_polygon_descriptions = dict(
+                            st.session_state.la_agent_state.confirmed_decisions
+                        )
+                        persist_current_task()
+                        st.rerun()
+                    except Exception as exc:
+                        st.warning(str(exc))
+
+                checks, ready = generation_checklist(
+                    bool(st.session_state.la_vector_path),
+                    st.session_state.la_global_goal,
+                    st.session_state.la_polygon_ids,
+                    st.session_state.la_agent_state.confirmed_decisions,
+                    st.session_state.la_agent_state.unchanged_polygon_ids,
+                )
+                with st.expander("Generate readiness", expanded=not ready):
+                    for label, passed in checks.items():
+                        st.write(f"{'✅' if passed else '⬜'} {label}")
 
             if "la_before_after_df" in st.session_state:
                 st.caption("Decision table")

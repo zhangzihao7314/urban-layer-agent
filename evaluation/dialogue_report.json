@@ -1,0 +1,23 @@
+{
+  "case_count": 4,
+  "passed": 4,
+  "dialogue_success_rate": 1.0,
+  "details": [
+    {
+      "name": "multi polygon plan",
+      "passed": true
+    },
+    {
+      "name": "context copy",
+      "passed": true
+    },
+    {
+      "name": "constraint exclusion",
+      "passed": true
+    },
+    {
+      "name": "grounded limitation",
+      "passed": true
+    }
+  ]
+}

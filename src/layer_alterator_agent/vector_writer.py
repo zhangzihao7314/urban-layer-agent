@@ -2,6 +2,7 @@ from pathlib import Path
 import geopandas as gpd
 
 from src.layer_alterator_agent.attribute_generator import generate_polygon_attributes
+from src.layer_alterator_agent.output_schema import preserve_source_semantics
 
 
 ID_COLUMN_CANDIDATES = ["polygon_id", "fid", "id", "name"]
@@ -64,17 +65,17 @@ def write_attributes_to_vector(
         2: "parking lot"
     }
     """
-    gdf = load_vector(vector_path)
+    gdf = preserve_source_semantics(load_vector(vector_path))
 
     id_column = resolve_id_column(gdf, id_column)
 
     for idx, row in gdf.iterrows():
         polygon_id = row[id_column]
 
+        # Polygons explicitly marked "unchanged" are intentionally omitted
+        # from polygon_descriptions and keep their source attributes.
         if polygon_id not in polygon_descriptions:
-            raise ValueError(
-                f"Missing user description for polygon_id={polygon_id}"
-            )
+            continue
 
         attributes = generate_polygon_attributes(
             reference_df=reference_df,

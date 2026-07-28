@@ -1,0 +1,58 @@
+[
+  {
+    "name": "cooling recreation park",
+    "initial": "Polygon 7 should become a pleasant park",
+    "answers": ["Cooling and recreation.", "Scattered trees with some shade and keep it open."],
+    "expected_type": "Scattered trees",
+    "max_questions": 3
+  },
+  {
+    "name": "grass activity park",
+    "initial": "Polygon 7 should become a park",
+    "answers": ["Recreation.", "Open grass and low plants.", "Keep it open."],
+    "expected_type": "Low Plants",
+    "max_questions": 4
+  },
+  {
+    "name": "wooded cooling park",
+    "initial": "Polygon 7 should become a park",
+    "answers": ["Cooling.", "Dense trees."],
+    "expected_type": "Dense trees",
+    "max_questions": 3
+  },
+  {
+    "name": "stormwater park",
+    "initial": "Polygon 7 should become a park",
+    "answers": ["Stormwater management.", "Scattered trees.", "Allow water."],
+    "expected_complete": true,
+    "max_questions": 4
+  },
+  {
+    "name": "already complete grass request",
+    "initial": "Polygon 7 should become an open grass park for recreation",
+    "answers": [],
+    "expected_type": "Low Plants",
+    "max_questions": 1
+  },
+  {
+    "name": "biodiversity forest style",
+    "initial": "Polygon 7 should become a park",
+    "answers": ["Biodiversity.", "Dense trees."],
+    "expected_type": "Dense trees",
+    "max_questions": 3
+  },
+  {
+    "name": "open shade compromise",
+    "initial": "Polygon 7 should become a park",
+    "answers": ["Recreation.", "Some trees and partial shade.", "Remain open."],
+    "expected_type": "Scattered trees",
+    "max_questions": 4
+  },
+  {
+    "name": "no water constraint",
+    "initial": "Polygon 7 should become a park without water",
+    "answers": ["Cooling.", "Scattered trees."],
+    "excluded_type": "Water",
+    "max_questions": 3
+  }
+]

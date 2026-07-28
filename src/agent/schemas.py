@@ -1,6 +1,6 @@
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 
 class Intent(str, Enum):
@@ -46,6 +46,8 @@ class TypologyProposal:
     needs_clarification: bool
     clarification_question: Optional[str] = None
     predictor_values: Dict[str, float] = field(default_factory=dict)
+    planning_typology: Optional[str] = None
+    candidate_evidence: List[str] = field(default_factory=list)
 
 
 @dataclass
@@ -59,4 +61,13 @@ class AgentState:
     pending_proposal: Optional[TypologyProposal] = None
     outputs: Dict[str, str] = field(default_factory=dict)
     last_error: Optional[str] = None
-
+    conversation_history: List[Dict[str, str]] = field(default_factory=list)
+    tool_history: List[Dict[str, Any]] = field(default_factory=list)
+    constraints: List[str] = field(default_factory=list)
+    decision_records: List[Dict[str, Any]] = field(default_factory=list)
+    decision_snapshots: List[Dict[str, Any]] = field(default_factory=list)
+    pending_multi_plan: Dict[int, TypologyProposal] = field(default_factory=dict)
+    unchanged_polygon_ids: List[int] = field(default_factory=list)
+    pending_unchanged_polygon_ids: List[int] = field(default_factory=list)
+    active_requirement: Optional[Any] = None
+    complete_proposals: Dict[int, Any] = field(default_factory=dict)

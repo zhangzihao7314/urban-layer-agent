@@ -39,10 +39,8 @@ URBAN_TYPE_ALIASES = {
     "forest": "Dense trees",
     "many trees": "Dense trees",
     "tree area": "Dense trees",
-    "park": "Dense trees",
-    "park area": "Dense trees",
-    "urban green": "Dense trees",
-    "green area": "Dense trees",
+    # Generic park language is resolved from the professor's correspondence
+    # table because several LCZ types can legitimately represent a park.
 
     "scattered trees": "Scattered trees",
     "sparse trees": "Scattered trees",

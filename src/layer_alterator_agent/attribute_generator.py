@@ -10,6 +10,8 @@ def generate_polygon_attributes(
     reference_df,
     polygon_id,
     user_description,
+    planning_typology=None,
+    confidence=None,
 ):
     """
     Generate Layer Alterator attributes for one polygon.
@@ -32,9 +34,19 @@ def generate_polygon_attributes(
 
     result = {
         "polygon_id": polygon_id,
+        "user_request": user_description,
         "user_description": user_description,
+        "target_planning_typology": planning_typology,
+        "target_lcz_type": matched_urban_type,
         "matched_urban_type": matched_urban_type,
+        "decision_confidence": confidence,
     }
+
+    matched_row = reference_df[
+        reference_df["Class Name"].astype(str).str.lower() == matched_urban_type.lower()
+    ].iloc[0]
+    if "LCZ" in reference_df.columns:
+        result["target_lcz_code"] = matched_row["LCZ"]
 
     result.update(predictor_values)
 

@@ -1,0 +1,9 @@
+text,expected_planning_typology,expected_top_group
+Polygon 7 should become a park,Urban Park,Scattered trees|Low Plants|Dense trees
+Polygon 7 should become a wooded park,Urban Park,Dense trees|Scattered trees
+Polygon 8 should become an urban forest,Urban Forest,Dense trees
+Polygon 9 should become a grass park,Urban Park,Low Plants
+Turn Polygon 7 into a waterfront,Waterfront,Water
+Use Polygon 8 for industrial logistics,Industrial / Logistics,Large low-rise
+Make Polygon 9 a large paved transport area,Transport / Large Paved,Bare rock or paved
+Create suburban detached housing in Polygon 7,Suburban Detached Housing,Open low-rise

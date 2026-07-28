@@ -24,6 +24,7 @@ data/conversations/
 data/layer_alterator_outputs/
 data/layer_alterator_rasters/
 data/uploads/
+data/tasks/
 
 # Operating system files
 Thumbs.db

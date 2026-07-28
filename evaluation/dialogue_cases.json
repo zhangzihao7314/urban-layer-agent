@@ -1,0 +1,29 @@
+[
+  {
+    "name": "multi polygon plan",
+    "messages": [
+      "Make Polygon 7 a grass park, Polygon 8 a wooded park, and leave Polygon 9 unchanged."
+    ],
+    "expected": {
+      "7": "Low Plants",
+      "8": "Dense trees",
+      "unchanged": [9]
+    }
+  },
+  {
+    "name": "context copy",
+    "initial_decisions": {"7": "Low Plants"},
+    "messages": ["Apply the same choice to Polygon 8"],
+    "expected": {"8": "Low Plants"}
+  },
+  {
+    "name": "constraint exclusion",
+    "messages": ["Make Polygon 7 a park without water, and Polygon 8 a wooded park."],
+    "expected_excluded_type": "Water"
+  },
+  {
+    "name": "grounded limitation",
+    "messages": ["Keep Polygon 7 accessible for pedestrians and make Polygon 8 a grass park."],
+    "expected_warning_contains": "cannot be verified"
+  }
+]

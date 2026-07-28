@@ -5,6 +5,9 @@ import geopandas as gpd
 from src.layer_alterator_agent.reference_loader import load_reference_table
 from src.layer_alterator_agent.vector_writer import write_attributes_to_vector
 from src.layer_alterator_agent.rules_generator import generate_mask_rules
+from src.agent.evidence import build_decision_record, write_evidence_bundle
+from src.layer_alterator_agent.reference_loader import get_predictor_values
+from src.agent.execution_manager import build_execution_plan, validate_generated_inputs
 
 
 def generate_layer_alterator_inputs(
@@ -46,9 +49,41 @@ def generate_layer_alterator_inputs(
 
     gdf = gpd.read_file(updated_vector_path)
 
+    records = []
+    for polygon_id, description in polygon_descriptions.items():
+        from src.layer_alterator_agent.matcher import match_urban_type
+        urban_type = match_urban_type(description)
+        records.append(build_decision_record(
+            polygon_id, description, None, [], urban_type,
+            get_predictor_values(reference_df, urban_type), True,
+        ))
+    evidence_outputs = write_evidence_bundle(
+        output_dir, "", records, [reference_table_path],
+    )
+    validation = validate_generated_inputs(
+        vector_path,
+        str(updated_vector_path),
+        str(rules_path),
+        str(config_path),
+        reference_df,
+        id_column or "polygon_id",
+        {
+            polygon_id: record["final_lcz_type"]
+            for polygon_id, record in zip(polygon_descriptions, records)
+        },
+    )
+    if not validation.valid:
+        raise ValueError(
+            "Generated Layer Alterator inputs failed validation: "
+            + "; ".join(validation.errors)
+        )
+
     return {
         "updated_vector_path": str(updated_vector_path),
         "rules_path": str(rules_path),
         "config_path": str(config_path),
         "attribute_table": gdf.drop(columns="geometry").to_dict(orient="records"),
+        **evidence_outputs,
+        "execution_plan": [step.__dict__ for step in build_execution_plan()],
+        "validation_report": validation.__dict__,
     }

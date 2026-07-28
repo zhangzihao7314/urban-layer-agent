@@ -1,0 +1,20 @@
+{
+  "warning": "The stages use different small development sets; values are engineering indicators, not a controlled final experiment.",
+  "fixed_keyword_baseline": {
+    "intent_accuracy": 1.0,
+    "urban_type_accuracy": 1.0,
+    "multi_turn_requirement_elicitation": false
+  },
+  "table_driven_workflow": {
+    "typology_accuracy": 1.0,
+    "ranking_accuracy": 1.0,
+    "multi_turn_requirement_elicitation": false
+  },
+  "proposed_elicitation_agent": {
+    "dialogue_success_rate": 1.0,
+    "requirement_task_success_rate": 1.0,
+    "average_clarification_turns": 1.875,
+    "repeated_question_rate": 0.0,
+    "multi_turn_requirement_elicitation": true
+  }
+}
