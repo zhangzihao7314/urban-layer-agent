@@ -22,6 +22,7 @@ logs/
 data/chroma_db/
 data/conversations/
 data/layer_alterator_outputs/
+data/layer_alterator_rasters/
 data/uploads/
 
 # Operating system files

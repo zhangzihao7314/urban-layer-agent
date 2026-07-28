@@ -1,129 +1,76 @@
-# GIS-RAG: Geoinformation-Retrieval-System 🛰️
+# Urban Layer Agent
 
-Unlock the full potential of your geospatial data with **GIS-RAG**.
+Master's thesis prototype for AI-assisted preparation of geospatial inputs for
+urban land-surface-temperature what-if simulations.
 
-This local-first Retrieval-Augmented Generation (RAG) system enables you to interact with your data using natural language. Whether it's technical PDF manuals, vector shapefiles, or satellite imagery metadata, GIS-RAG extracts the critical information and allows you to "chat" with it—all powered by a secure, local Large Language Model (LLM).
+The system combines:
 
-<img src="assets/interface.jpg" alt="System Interface" width="700" />
+- a locally deployable open-source LLM for language understanding;
+- a controlled conversational workflow with clarification and confirmation;
+- LCZ-based reference predictor values;
+- deterministic GIS validation and vector editing;
+- a Python implementation of the Layer Alterator C1 masking workflow.
 
-## Features
+The LLM does not invent predictor values and does not directly edit rasters.
+Numerical values come from the reference table and GIS operations are performed
+by deterministic Python functions.
 
-- 💬**Chat with your GIS Data**: seamless Integration of Local LLMs with geospatial datasets.
-- 🌍**Multimodal Support** 📦:
-    - **Vector Data**: Intelligently extracts attributes and metadata from Shapefiles (.shp), GeoJSON, and KML.
-    - **Raster Data**: Understands resolution, bounds, and bands from GeoTIFFs and satellite imagery.
-    - **Documents**: Parses PDFs (slides, research papers) to provide context-aware answers.
-- 🔒**Privacy First**: Fully local execution (embedding & generation) ensures your sensitive data never leaves your machine.
-- 🖥️**Dual Interface**: User-friendly Web UI (Streamlit) for easy interaction and a robust API (FastAPI) for developers.
+## Current MVP workflow
 
-| Data Type | Preview | Answer |
-|---|---|---|
-| Vector | ![Vector preview](assets/QA3.jpg) | ![Vector answer](assets/QA4.jpg) |
-| Raster | ![Raster preview](assets/QA5.jpg) | ![Raster answer](assets/QA6.jpg) |
+1. Upload a polygon vector.
+2. Select a stable zone ID (`polygon_id`, `fid`, `id`, or `name`).
+3. Describe the overall simulation goal.
+4. Describe a target transformation for each polygon.
+5. Clarify ambiguous descriptions.
+6. Review the proposed LCZ urban type and reference values.
+7. Confirm or revise each proposal.
+8. Generate `updated_vector.geojson` and `rules.json`.
+9. Run the C1 Layer Alterator against the UCP and fraction raster folders.
+10. Produce 12 modified raster layers.
 
-## Requirements
+Only C1 (`mask`) is implemented in the thesis MVP. C2/C3 percentage workflows
+and the downstream LST model are future extensions.
 
-- Python 3.10+
-- For local GPU deployment, 8GB+ VRAM is recommended
+## Run the web application
 
-## Recommended Models
-
-- LLM (Instruct): [`Qwen/Qwen3-4B-Instruct-2507-FP8`](https://huggingface.co/Qwen/Qwen3-4B-Instruct-2507-FP8)
-- LLM (Thinking): [`Qwen/Qwen3-4B-Thinking-2507-FP8`](https://huggingface.co/Qwen/Qwen3-4B-Thinking-2507-FP8)
-- Embedding model: [`BAAI/bge-m3`](https://huggingface.co/BAAI/bge-m3) (a strong multilingual retrieval model)
-
-These are a practical choice on an RTX 4070 (8GB VRAM) for local inference.
-
-## Quick Start
-
-### 1) Install dependencies
-
-```bash
-pip install -r requirements.txt
-```
-
-It is recommended to run inside a virtual environment (venv/conda both work).
-
-### 2) Configure `.env` (recommended)
-
-This project reads configuration from `.env` in the repository root. Use the provided example file:
-
-```bash
-# Windows (PowerShell)
-Copy-Item .env.example .env
-
-# macOS/Linux
-cp .env.example .env
-```
-
-Then edit `.env` and set at least the Instruct model path and device:
-
-```ini
-# Base model (Instruct)
-LLM_INSTRUCT_MODEL_PATH=YOUR_LOCAL_MODEL_DIR
-LLM_INSTRUCT_MODEL_NAME=Qwen/Qwen3-4B-Instruct-2507-FP8
-
-# Optional: thinking model (Deep Think)
-LLM_THINKING_MODEL_PATH=YOUR_LOCAL_THINKING_MODEL_DIR
-LLM_THINKING_MODEL_NAME=Qwen/Qwen3-4B-Thinking-2507-FP8
-
-# Device: cuda or cpu
-DEVICE=cuda
-
-# Service ports (optional)
-API_HOST=127.0.0.1
-API_PORT=8000
-WEB_HOST=127.0.0.1
-WEB_PORT=8501
-```
-
-Embedding settings, retrieval strategy, chunking parameters, etc. can also be overridden via `.env` (see `.env.example` for a full list).
-
-### 3) Start the Web UI
-
-```bash
+```powershell
+.\.venv\Scripts\Activate.ps1
 python start_web.py
 ```
 
-Default URL: `http://localhost:8501`
+Default address: <http://127.0.0.1:8501>
 
-### 4) Start the API
+## Run automated tests
 
-```bash
-python start_api.py
+```powershell
+python -m pytest tests -q
 ```
 
-Default URL: `http://localhost:8000`  
-Swagger docs: `http://localhost:8000/docs`
+The tests cover ID preservation, intent routing, typology matching, clarification,
+confirmation, reference-value validation, and a complete 12-raster C1 run.
 
-## Data & Directories
+## Run the baseline evaluation
 
-By default, the project uses `data/` as its working data directory:
-
-```
-data/
-  pdfs/          # PDF documents
-  vector/        # Vector data (.shp/.geojson/.gpkg/.kml)
-  raster/        # Raster data (.tif/.tiff/.jp2/.img/.nc)
-  chroma_db/     # Vector store persistence (Chroma)
-  conversations/ # Web chat history
-  uploads/       # Raw uploaded file cache (Web)
-logs/            # Runtime logs
+```powershell
+python evaluation\run_baseline.py
 ```
 
-You can either place files directly into these folders, or upload them via the Web UI.
+The report is written to `evaluation/baseline_report.json`. The included cases
+are a small engineering baseline, not the final thesis experiment.
 
-## Supported Formats
+## Important directories
 
-- Vector: Shapefile (.shp), GeoJSON (.geojson), GeoPackage (.gpkg), KML (.kml)
-- Raster: GeoTIFF (.tif/.tiff), JPEG2000 (.jp2), IMG (.img), NetCDF (.nc)
-- Documents: PDF (.pdf)
+```text
+src/agent/                    Conversation schemas, intent routing, state machine
+src/layer_alterator_agent/   LCZ matching and input-vector generation
+src/layer_alterator/         C1 validation and raster masking
+src/web/                     Streamlit interface
+data/reference/              LCZ predictor reference data
+tests/                       Automated tests
+evaluation/                  Baseline evaluation cases and runner
+```
 
-## Acknowledgements
+## Local files excluded from Git
 
-Thanks to the Qwen team and the BAAI team for open-sourcing excellent models.
-
-
-
-
-
+`.env`, `.venv`, model files, logs, Chroma data, conversations, uploads, and
+generated Layer Alterator outputs are intentionally not committed.

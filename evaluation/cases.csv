@@ -1,0 +1,12 @@
+text,expected_intent,expected_type
+Polygon 7 should become Dense trees,set_polygon,Dense trees
+Polygon 8 should become Water,set_polygon,Water
+Polygon 9 should become a parking lot,set_polygon,Bare rock or paved
+create a pond,chat,Water
+make all polygons Low Plants,apply_all,Low Plants
+Generate,generate,
+Why was this recommended?,ask_explanation,
+I want to reduce urban heat,set_goal,
+Polygon 7 should become a forest,set_polygon,Dense trees
+Polygon 8 should become grass,set_polygon,Low Plants
+

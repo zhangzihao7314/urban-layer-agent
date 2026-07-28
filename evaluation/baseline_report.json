@@ -1,0 +1,97 @@
+{
+  "case_count": 10,
+  "intent_accuracy": 1.0,
+  "urban_type_accuracy": 1.0,
+  "details": [
+    {
+      "text": "Polygon 7 should become Dense trees",
+      "expected_intent": "set_polygon",
+      "expected_type": "Dense trees",
+      "predicted_intent": "set_polygon",
+      "predicted_type": "Dense trees",
+      "intent_ok": true,
+      "type_ok": true
+    },
+    {
+      "text": "Polygon 8 should become Water",
+      "expected_intent": "set_polygon",
+      "expected_type": "Water",
+      "predicted_intent": "set_polygon",
+      "predicted_type": "Water",
+      "intent_ok": true,
+      "type_ok": true
+    },
+    {
+      "text": "Polygon 9 should become a parking lot",
+      "expected_intent": "set_polygon",
+      "expected_type": "Bare rock or paved",
+      "predicted_intent": "set_polygon",
+      "predicted_type": "Bare rock or paved",
+      "intent_ok": true,
+      "type_ok": true
+    },
+    {
+      "text": "create a pond",
+      "expected_intent": "chat",
+      "expected_type": "Water",
+      "predicted_intent": "chat",
+      "predicted_type": "Water",
+      "intent_ok": true,
+      "type_ok": true
+    },
+    {
+      "text": "make all polygons Low Plants",
+      "expected_intent": "apply_all",
+      "expected_type": "Low Plants",
+      "predicted_intent": "apply_all",
+      "predicted_type": "Low Plants",
+      "intent_ok": true,
+      "type_ok": true
+    },
+    {
+      "text": "Generate",
+      "expected_intent": "generate",
+      "expected_type": "",
+      "predicted_intent": "generate",
+      "predicted_type": "",
+      "intent_ok": true,
+      "type_ok": null
+    },
+    {
+      "text": "Why was this recommended?",
+      "expected_intent": "ask_explanation",
+      "expected_type": "",
+      "predicted_intent": "ask_explanation",
+      "predicted_type": "",
+      "intent_ok": true,
+      "type_ok": null
+    },
+    {
+      "text": "I want to reduce urban heat",
+      "expected_intent": "set_goal",
+      "expected_type": "",
+      "predicted_intent": "set_goal",
+      "predicted_type": "",
+      "intent_ok": true,
+      "type_ok": null
+    },
+    {
+      "text": "Polygon 7 should become a forest",
+      "expected_intent": "set_polygon",
+      "expected_type": "Dense trees",
+      "predicted_intent": "set_polygon",
+      "predicted_type": "Dense trees",
+      "intent_ok": true,
+      "type_ok": true
+    },
+    {
+      "text": "Polygon 8 should become grass",
+      "expected_intent": "set_polygon",
+      "expected_type": "Low Plants",
+      "predicted_intent": "set_polygon",
+      "predicted_type": "Low Plants",
+      "intent_ok": true,
+      "type_ok": true
+    }
+  ]
+}

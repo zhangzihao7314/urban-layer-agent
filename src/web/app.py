@@ -30,6 +30,18 @@ from src.layer_alterator_agent.reference_loader import (
     load_reference_table,
     get_predictor_values,
 )
+from src.agent.schemas import AgentStage, AgentState, Intent
+from src.agent.intent_router import route_intent
+from src.agent.state_machine import (
+    clarify_proposal,
+    confirm_proposal,
+    register_goal,
+    register_vector,
+    revise_proposal,
+    set_proposal,
+)
+from src.agent.typology_resolver import propose_typology
+from src.layer_alterator.service import run_c1_layer_alterator
 
 
 LAYER_AGENT_SYSTEM_PROMPT = """
@@ -1729,6 +1741,11 @@ def show_layer_alterator_agent_page():
         "la_last_recommendation": None,
         "la_pending_user_message": None,
         "la_processing": False,
+        "la_agent_state": AgentState(),
+        "la_layer_alterator_result": None,
+        "la_ucp_folder": "",
+        "la_fractions_folder": "",
+        "la_pending_batch": None,
     }
 
     for key, value in defaults.items():
@@ -1757,6 +1774,76 @@ def show_layer_alterator_agent_page():
         if not user_text:
             return
 
+        agent_state = st.session_state.la_agent_state
+        safe_intent = route_intent(user_text)
+
+        if st.session_state.la_pending_batch:
+            batch = st.session_state.la_pending_batch
+            if safe_intent.intent == Intent.CONFIRM:
+                for polygon_id in st.session_state.la_polygon_ids:
+                    st.session_state.la_polygon_descriptions[polygon_id] = batch["urban_type"]
+                    agent_state.confirmed_decisions[polygon_id] = batch["urban_type"]
+                agent_state.stage = AgentStage.READY_TO_GENERATE
+                st.session_state.la_pending_batch = None
+                st.session_state.la_before_after_df = build_before_after_table(
+                    st.session_state.la_polygon_descriptions,
+                    reference_df,
+                )
+                add_message("assistant", f"Confirmed: all polygons → **{batch['urban_type']}**.")
+                return
+            if safe_intent.intent == Intent.REVISE:
+                st.session_state.la_pending_batch = None
+                add_message("assistant", "The batch proposal was discarded.")
+                return
+            add_message("assistant", "A batch proposal is waiting. Type `Confirm` or `Revise`.")
+            return
+
+        if agent_state.stage == AgentStage.WAITING_FOR_CLARIFICATION:
+            proposal = agent_state.pending_proposal
+            selected_type = next(
+                (item for item in proposal.candidate_types if item.lower() in user_text.lower()),
+                None,
+            )
+            if not selected_type:
+                add_message("assistant", proposal.clarification_question)
+                return
+            values = get_predictor_values(reference_df, selected_type)
+            clarify_proposal(agent_state, selected_type, values)
+            add_message(
+                "assistant",
+                (
+                    f"Proposed type for Polygon {proposal.polygon_id}: **{selected_type}**\n\n"
+                    "The numerical values come from the LCZ reference table. "
+                    "Type `Confirm` to accept or `Revise` to choose again."
+                ),
+            )
+            return
+
+        if agent_state.stage == AgentStage.WAITING_FOR_CONFIRMATION:
+            proposal = agent_state.pending_proposal
+            if safe_intent.intent == Intent.CONFIRM:
+                confirm_proposal(agent_state)
+                st.session_state.la_polygon_descriptions[proposal.polygon_id] = proposal.recommended_type
+                st.session_state.la_before_after_df = build_before_after_table(
+                    st.session_state.la_polygon_descriptions,
+                    reference_df,
+                )
+                add_message(
+                    "assistant",
+                    (
+                        f"Confirmed: Polygon {proposal.polygon_id} → "
+                        f"**{proposal.recommended_type}**.\n\n"
+                        f"{build_polygon_status_text(st.session_state.la_polygon_descriptions)}"
+                    ),
+                )
+                return
+            if safe_intent.intent == Intent.REVISE:
+                revise_proposal(agent_state)
+                add_message("assistant", f"Proposal for Polygon {proposal.polygon_id} was discarded. Please describe it again.")
+                return
+            add_message("assistant", "A proposal is waiting for your decision. Type `Confirm` or `Revise`.")
+            return
+
         intent_result = classify_user_intent_with_llm(user_text)
         intent_result = normalize_intent_result(user_text, intent_result)
         intent = intent_result["intent"]
@@ -1764,6 +1851,7 @@ def show_layer_alterator_agent_page():
         # 1. Set global goal
         if intent == "set_goal":
             st.session_state.la_global_goal = user_text
+            register_goal(agent_state, user_text)
 
             recommendation = recommend_urban_types_from_goal(user_text)
             scenarios = build_scenario_candidates(user_text)
@@ -1823,24 +1911,17 @@ def show_layer_alterator_agent_page():
                 )
                 return
 
-            for pid in st.session_state.la_polygon_ids:
-                st.session_state.la_polygon_descriptions[pid] = desc
-
-            before_after_df = build_before_after_table(
-                st.session_state.la_polygon_descriptions,
-                reference_df,
-            )
-            st.session_state.la_before_after_df = before_after_df
-
+            st.session_state.la_pending_batch = {
+                "description": desc,
+                "urban_type": matched_type,
+            }
             add_message(
                 "assistant",
                 (
-                    f"I applied **{desc}** to all polygons.\n\n"
-                    f"{build_polygon_status_text(st.session_state.la_polygon_descriptions)}\n\n"
-                    "You can still modify any polygon individually, ask why, or type `Generate`."
+                    f"Proposed type for all polygons: **{matched_type}**.\n\n"
+                    "Type `Confirm` to accept or `Revise` to cancel."
                 )
             )
-            st.session_state.la_stage = "free_chat"
             return
 
         # 3. Set or modify one polygon
@@ -1873,29 +1954,26 @@ def show_layer_alterator_agent_page():
                 return
 
             try:
-                matched_type = match_urban_type(desc)
-                values = get_predictor_values(reference_df, matched_type)
-                key_summary, full_summary, explanation = get_predictor_summary_for_type(matched_type, values)
+                proposal = propose_typology(pid, desc)
+                set_proposal(agent_state, proposal)
+                if proposal.needs_clarification:
+                    add_message("assistant", proposal.clarification_question)
+                    return
 
-                st.session_state.la_polygon_descriptions[pid] = desc
-
-                before_after_df = build_before_after_table(
-                    st.session_state.la_polygon_descriptions,
-                    reference_df,
+                values = get_predictor_values(reference_df, proposal.recommended_type)
+                proposal.predictor_values = values
+                key_summary, _, explanation = get_predictor_summary_for_type(
+                    proposal.recommended_type,
+                    values,
                 )
-                st.session_state.la_before_after_df = before_after_df
-
-                reply = f"Polygon {pid} has been updated to **{desc}**.\n\n"
-                reply += f"Matched LCZ urban type: **{matched_type}**\n\n"
-                reply += f"{explanation}\n\n"
-                reply += "Key predictor values:\n"
-
-                for k, v in key_summary.items():
-                    reply += f"- {k}: {v:.3f}\n"
-
-                reply += "\n"
-                reply += build_polygon_status_text(st.session_state.la_polygon_descriptions)
-
+                reply = (
+                    f"Proposed type for Polygon {pid}: **{proposal.recommended_type}**\n\n"
+                    f"Confidence: **{proposal.confidence:.2f}**\n\n"
+                    f"{explanation}\n\nKey predictor values:\n"
+                )
+                for key, value in key_summary.items():
+                    reply += f"- {key}: {value:.3f}\n"
+                reply += "\nType `Confirm` to accept or `Revise` to choose again."
                 add_message("assistant", reply)
 
             except Exception as e:
@@ -1948,6 +2026,13 @@ def show_layer_alterator_agent_page():
                 )
                 return
 
+            if agent_state.stage != AgentStage.READY_TO_GENERATE:
+                add_message(
+                    "assistant",
+                    "All polygon decisions must be explicitly confirmed before generation.",
+                )
+                return
+
             try:
                 result = generate_layer_alterator_inputs(
                     vector_path=st.session_state.la_vector_path,
@@ -1970,6 +2055,11 @@ def show_layer_alterator_agent_page():
 
                 st.session_state.la_generation_result = result
                 st.session_state.la_stage = "generated"
+                agent_state.stage = AgentStage.INPUTS_GENERATED
+                agent_state.outputs = {
+                    key: value for key, value in result.items()
+                    if key.endswith("_path") and isinstance(value, str)
+                }
 
                 add_message("assistant", msg_type="generation_result")
 
@@ -2058,6 +2148,12 @@ def show_layer_alterator_agent_page():
                 st.session_state.la_generation_result = None
                 st.session_state.la_stage = "waiting_for_goal"
                 st.session_state.la_chat_history = []
+                register_vector(
+                    st.session_state.la_agent_state,
+                    str(vector_path),
+                    id_column,
+                    polygon_ids,
+                )
 
                 add_message(
                     "assistant",
@@ -2273,6 +2369,40 @@ def show_layer_alterator_agent_page():
                 st.caption(
                     "Generated files will appear here."
                 )
+
+        with st.container(border=True):
+            st.markdown("##### Run C1 Layer Alterator")
+            st.caption("Available after the vector and rules files have been generated.")
+            st.session_state.la_ucp_folder = st.text_input(
+                "UCP raster folder",
+                value=st.session_state.la_ucp_folder,
+                placeholder="Folder containing TCH.tif, IMD.tif, BH.tif, BSF.tif, SVF.tif",
+            )
+            st.session_state.la_fractions_folder = st.text_input(
+                "Fraction raster folder",
+                value=st.session_state.la_fractions_folder,
+                placeholder="Folder containing the seven F_*.tif layers",
+            )
+            if st.button("Run C1 Layer Alterator", use_container_width=True, disabled=not bool(result)):
+                try:
+                    st.session_state.la_agent_state.stage = AgentStage.RUNNING_LAYER_ALTERATOR
+                    layer_result = run_c1_layer_alterator(
+                        vector_mask_path=result["updated_vector_path"],
+                        rules_path=result["rules_path"],
+                        ucp_folder=st.session_state.la_ucp_folder,
+                        fractions_folder=st.session_state.la_fractions_folder,
+                        output_folder=str(settings.PROJECT_ROOT / "data" / "layer_alterator_rasters"),
+                    )
+                    st.session_state.la_layer_alterator_result = layer_result
+                    st.session_state.la_agent_state.stage = AgentStage.COMPLETED
+                    st.success(f"Generated {len(layer_result.raster_outputs)} modified raster layers.")
+                except Exception as exc:
+                    st.session_state.la_agent_state.stage = AgentStage.ERROR
+                    st.session_state.la_agent_state.last_error = str(exc)
+                    st.error(f"Layer Alterator failed: {exc}")
+
+            if st.session_state.la_layer_alterator_result:
+                st.write(f"Output folder: `{st.session_state.la_layer_alterator_result.output_dir}`")
     # ---------- Chat panel ----------
     with chat_col:
         st.subheader("Conversational Planning")
@@ -2762,6 +2892,3 @@ def show_settings_page():
 
 if __name__ == "__main__":
     main()
-
-
-
