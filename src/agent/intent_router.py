@@ -7,6 +7,15 @@ from src.agent.schemas import Intent, IntentDecision
 
 def rule_based_intent(user_text: str) -> IntentDecision:
     text = user_text.lower().strip()
+    command = text.strip(" \t\r\n.!?,;:")
+    if command in {"confirm", "yes", "accept"}:
+        return IntentDecision(Intent.CONFIRM, confidence=1.0)
+    if (
+        command in {"revise", "change", "no", "cancel", "discard"}
+        or command.startswith("revise ")
+        or command.startswith("cancel ")
+    ):
+        return IntentDecision(Intent.REVISE, confidence=1.0)
     if text in {"confirm", "yes", "accept", "确认", "同意"}:
         return IntentDecision(Intent.CONFIRM, confidence=1.0)
     if text in {"revise", "change", "no", "修改", "不确认"}:
@@ -15,6 +24,11 @@ def rule_based_intent(user_text: str) -> IntentDecision:
         return IntentDecision(Intent.GENERATE, confidence=0.95)
     if any(k in text for k in ["why", "explain", "reason", "为什么", "解释"]):
         return IntentDecision(Intent.ASK_EXPLANATION, confidence=0.9)
+    if (
+        text.endswith("?")
+        or text.startswith(("what ", "how ", "which ", "tell me about "))
+    ):
+        return IntentDecision(Intent.CHAT, confidence=0.9)
     if any(k in text for k in ["all polygons", "all areas", "全部区域", "所有区域"]):
         return IntentDecision(Intent.APPLY_ALL, target_description=_remove_all_phrases(user_text), confidence=0.9)
 
@@ -67,4 +81,3 @@ def _remove_all_phrases(text: str) -> str:
     for phrase in ["make all polygons", "change all polygons to", "all polygons", "all areas", "全部区域", "所有区域"]:
         text = re.sub(re.escape(phrase), "", text, flags=re.IGNORECASE)
     return text.strip(" :，。")
-

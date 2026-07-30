@@ -1,4 +1,5 @@
 from difflib import get_close_matches
+import re
 
 
 SUPPORTED_URBAN_TYPES = [
@@ -36,6 +37,7 @@ URBAN_TYPE_ALIASES = {
     "warehouse": "Large low-rise",
 
     "dense trees": "Dense trees",
+    "dense tree": "Dense trees",
     "forest": "Dense trees",
     "many trees": "Dense trees",
     "tree area": "Dense trees",
@@ -43,9 +45,11 @@ URBAN_TYPE_ALIASES = {
     # table because several LCZ types can legitimately represent a park.
 
     "scattered trees": "Scattered trees",
+    "scattered tree": "Scattered trees",
     "sparse trees": "Scattered trees",
 
     "low plants": "Low Plants",
+    "low plant": "Low Plants",
     "grass": "Low Plants",
     "grassland": "Low Plants",
     "lawn": "Low Plants",
@@ -86,7 +90,7 @@ def match_urban_type(user_text: str) -> str:
     )
 
     for alias, urban_type in sorted_aliases:
-        if alias in text:
+        if re.search(rf"(?<!\w){re.escape(alias)}(?!\w)", text):
             return urban_type
 
     close_matches = get_close_matches(

@@ -65,6 +65,21 @@ from src.agent.proposal_engine import (
 )
 from src.agent.requirements import PlanningRequirement, requirement_to_description
 from src.agent.execution_manager import validate_raster_outputs, recommend_replanning
+from src.agent.contextual_queries import (
+    answer_supported_goal_question,
+    answer_type_question,
+    asks_about_pending_options,
+    asks_for_data_source,
+    asks_for_context_explanation,
+    asks_for_type_definition,
+    asks_for_type_values,
+    asks_to_change_goal,
+    asks_for_type_comparison,
+    compare_urban_types,
+    explain_goal_context,
+    is_informational_question,
+    is_social_or_meta_message,
+)
 from src.layer_alterator.simulation_runner import run_layer_alterator
 from src.web.workspace_helpers import (
     add_delivery_bundle,
@@ -270,6 +285,14 @@ def normalize_intent_result(user_text: str, intent_result: dict):
     """
     rule_intent = classify_user_intent(user_text)
 
+    if is_informational_question(user_text):
+        return {
+            "intent": "chat",
+            "polygon_id": None,
+            "target_description": None,
+            "confidence": 0.95,
+        }
+
     intent = intent_result.get("intent", "chat")
     pid = intent_result.get("polygon_id")
     desc = intent_result.get("target_description")
@@ -455,6 +478,28 @@ def get_predictor_summary_for_type(matched_type: str, values: dict):
 
 def build_scenario_candidates(global_goal: str):
     text = global_goal.lower()
+
+    if (
+        any(k in text for k in ["heat", "hot", "temperature"])
+        and any(k in text for k in ["increase", "raise", "higher", "hotter", "more heat"])
+    ):
+        return [
+            {
+                "name": "Scenario A - More impervious surface",
+                "description": "Increase paved or impervious coverage associated with greater heat retention.",
+                "types": ["Bare rock or paved", "Compact low-rise"],
+            },
+            {
+                "name": "Scenario B - Compact built form",
+                "description": "Use a denser built morphology with less vegetated surface.",
+                "types": ["Compact midrise", "Compact low-rise"],
+            },
+            {
+                "name": "Scenario C - Reduced vegetation",
+                "description": "Compare surfaces with lower vegetation fractions.",
+                "types": ["Bare rock or paved", "Bare Soil or sand"],
+            },
+        ]
 
     if any(k in text for k in ["heat", "hot", "cool", "temperature", "热岛", "降温", "凉快"]):
         return [
@@ -656,7 +701,10 @@ def run_llm_once(prompt: str) -> str:
 def classify_user_intent(user_text: str):
     text = user_text.lower().strip()
 
-    if any(k in text for k in ["generate", "run", "create files", "生成", "运行", "创建文件"]):
+    if any(k in text for k in [
+        "generate", "create files", "run layer alterator",
+        "生成文件", "运行 layer alterator", "创建文件",
+    ]):
         return "generate"
 
     if any(k in text for k in ["why", "explain", "reason", "为什么", "解释"]):
@@ -668,7 +716,13 @@ def classify_user_intent(user_text: str):
     if re.search(r"polygon\s*\d+", text) or re.search(r"多边形\s*\d+", text):
         return "set_polygon"
 
-    if any(k in text for k in ["heat", "cool", "green", "tree", "water", "park", "热岛", "降温", "绿化", "水体", "公园"]):
+    if (
+        not is_informational_question(user_text)
+        and any(k in text for k in [
+            "heat", "cool", "green", "tree", "water", "park",
+            "热岛", "降温", "绿化", "水体", "公园",
+        ])
+    ):
         return "set_goal"
 
     return "unknown"
@@ -749,10 +803,27 @@ def explain_current_recommendation(global_goal, polygon_descriptions, reference_
     lines = []
 
     if global_goal:
-        rec = recommend_urban_types_from_goal(global_goal)
+        rec = recommend_for_goal(global_goal)
         lines.append(f"Overall goal: **{global_goal}**")
-        lines.append(f"Detected intention: **{rec['goal']}**")
-        lines.append(rec["explanation"])
+        lines.append(f"Detected intention: **{rec.goal}**")
+        lines.append(rec.explanation)
+        if rec.ranked_types:
+            lines.append("")
+            lines.append(
+                "For this goal, higher vegetation and water fractions are rewarded, "
+                "while imperviousness is penalized. The leading reference-table matches are:"
+            )
+            for urban_type in rec.ranked_types[:3]:
+                values = get_predictor_values(reference_df, urban_type)
+                lines.append(
+                    f"- **{urban_type}** — score {rec.scores[urban_type]:.3f}; "
+                    f"F_TV={values['F_TV']:.3f}, F_G={values['F_G']:.3f}, "
+                    f"F_W={values['F_W']:.3f}, IMD={values['IMD']:.3f}"
+                )
+            lines.append(
+                "These values explain the ranking, but actual cooling still requires "
+                "meteorological or land-surface-temperature validation."
+            )
         lines.append("")
 
     for pid, desc in polygon_descriptions.items():
@@ -788,7 +859,13 @@ hide_streamlit_style = """
 
 /* 隐藏右上角 Deploy 和菜单 */
 [data-testid="stToolbar"] {
-    display: none;
+    display: flex !important;
+}
+
+[data-testid="stToolbarActions"],
+[data-testid="stStatusWidget"],
+[data-testid="stMainMenu"] {
+    display: none !important;
 }
 
 /* 隐藏顶部 header */
@@ -799,6 +876,17 @@ header {
 
 [data-testid="stSidebarCollapsedControl"] {
     display: flex !important;
+    visibility: visible !important;
+}
+
+[data-testid="stExpandSidebarButton"] {
+    display: flex !important;
+    visibility: visible !important;
+    opacity: 1 !important;
+    pointer-events: auto !important;
+}
+
+[data-testid="stSidebarCollapseButton"] {
     visibility: visible !important;
 }
 
@@ -1969,6 +2057,63 @@ def show_layer_alterator_agent_page():
             return
 
         agent_state = st.session_state.la_agent_state
+        if asks_for_type_comparison(user_text):
+            answer = compare_urban_types(
+                user_text,
+                st.session_state.la_global_goal,
+                lambda urban_type: get_predictor_values(reference_df, urban_type),
+            )
+            add_message("assistant", answer)
+            return
+        if asks_for_context_explanation(user_text):
+            add_message(
+                "assistant",
+                explain_goal_context(st.session_state.la_global_goal),
+            )
+            return
+        if (
+            asks_for_type_definition(user_text)
+            or asks_for_type_values(user_text)
+            or asks_for_data_source(user_text)
+        ):
+            add_message(
+                "assistant",
+                answer_type_question(
+                    user_text,
+                    lambda urban_type: get_predictor_values(reference_df, urban_type),
+                ),
+            )
+            return
+        if asks_about_pending_options(user_text) and agent_state.pending_proposal:
+            proposal = agent_state.pending_proposal
+            add_message(
+                "assistant",
+                explain_grounded_choice(proposal, user_text)
+                + "\n\nThe proposal is still pending. You may name an alternative, "
+                "ask about any type, or say `Confirm`/`Revise` when ready.",
+            )
+            return
+        if is_social_or_meta_message(user_text):
+            add_message("assistant", answer_general_chat(user_text))
+            return
+        if is_informational_question(user_text):
+            answer = answer_supported_goal_question(user_text)
+            if not answer:
+                answer = answer_general_chat(user_text)
+            add_message("assistant", answer)
+            return
+        goal_change_requested = (
+            bool(st.session_state.la_global_goal)
+            and bool(st.session_state.la_vector_path)
+            and asks_to_change_goal(user_text)
+        )
+        if goal_change_requested:
+            agent_state.pending_proposal = None
+            agent_state.active_requirement = None
+            agent_state.pending_multi_plan = {}
+            agent_state.pending_unchanged_polygon_ids = []
+            st.session_state.la_pending_batch = None
+            agent_state.stage = AgentStage.WAITING_FOR_POLYGON
         safe_intent = route_intent(user_text)
         controller_result = ConversationController().interpret(user_text, agent_state)
 
@@ -2273,15 +2418,31 @@ def show_layer_alterator_agent_page():
 
         intent_result = classify_user_intent_with_llm(user_text)
         intent_result = normalize_intent_result(user_text, intent_result)
-        intent = intent_result["intent"]
+        intent = "set_goal" if goal_change_requested else intent_result["intent"]
 
         # 1. Set global goal
         if intent == "set_goal":
+            if not st.session_state.la_vector_path:
+                add_message(
+                    "assistant",
+                    (
+                        "I understand that you want to set the simulation goal to:\n\n"
+                        f"> {user_text}\n\n"
+                        "Please upload a polygon vector first so I can connect this "
+                        "goal to specific areas. You can still ask general questions "
+                        "before uploading data."
+                    ),
+                )
+                return
             st.session_state.la_global_goal = user_text
             register_goal(agent_state, user_text)
 
             recommendation = recommend_urban_types_from_goal(user_text)
-            scenarios = build_scenario_candidates(user_text)
+            scenarios = (
+                build_scenario_candidates(user_text)
+                if recommendation["recommended_types"]
+                else []
+            )
 
             st.session_state.la_last_recommendation = recommendation
             st.session_state.la_scenario_candidates = scenarios
@@ -2296,11 +2457,23 @@ def show_layer_alterator_agent_page():
                 for t in recommendation["recommended_types"]:
                     reply += f"- {t}\n"
 
-            reply += "\nCandidate scenarios:\n"
-            for i, scenario in enumerate(scenarios, start=1):
-                reply += f"\n**{i}. {scenario['name']}**\n"
-                reply += f"{scenario['description']}\n"
-                reply += "Urban types: " + ", ".join(scenario["types"]) + "\n"
+            if scenarios:
+                reply += "\nCandidate scenarios:\n"
+                for i, scenario in enumerate(scenarios, start=1):
+                    reply += f"\n**{i}. {scenario['name']}**\n"
+                    reply += f"{scenario['description']}\n"
+                    reply += "Urban types: " + ", ".join(scenario["types"]) + "\n"
+            else:
+                reply += (
+                    "\nThis version cannot yet simulate population growth directly. "
+                    "The professor-provided reference tables describe LCZ urban types "
+                    "and physical predictor values, but they do not contain population "
+                    "projections, time steps, housing demand, or growth-allocation rules. "
+                    "I have therefore not invented LCZ scenarios for this request.\n\n"
+                    "You may describe the spatial consequence you want to test—for "
+                    "example, more compact housing, open low-rise expansion, or "
+                    "preserving green space—or provide population and land-demand data."
+                )
 
             reply += (
                 "\nYou can continue freely. For example:\n"
@@ -2311,6 +2484,15 @@ def show_layer_alterator_agent_page():
             )
 
             add_message("assistant", reply)
+            if goal_change_requested and agent_state.confirmed_decisions:
+                add_message(
+                    "assistant",
+                    (
+                        "The unconfirmed proposal was cancelled. Your previously "
+                        "confirmed polygon decisions were kept. Please review them, "
+                        "because the simulation goal has changed."
+                    ),
+                )
             st.session_state.la_stage = "free_chat"
             return
 
@@ -2639,7 +2821,6 @@ def show_layer_alterator_agent_page():
                 st.session_state.la_current_polygon_index = 0
                 st.session_state.la_generation_result = None
                 st.session_state.la_stage = "waiting_for_goal"
-                st.session_state.la_chat_history = []
                 register_vector(
                     st.session_state.la_agent_state,
                     str(vector_path),
@@ -2957,7 +3138,21 @@ def show_layer_alterator_agent_page():
                 st.session_state.la_pending_user_message = None
                 st.session_state.la_processing = False
 
-                process_user_message(pending_msg)
+                try:
+                    process_user_message(pending_msg)
+                except ValueError as exc:
+                    log.warning(f"User workflow request could not be applied: {exc}")
+                    message = str(exc)
+                    if "Upload a vector" in message:
+                        message = (
+                            "Please upload a polygon vector before applying this "
+                            "planning action. You can continue asking general "
+                            "questions in the meantime."
+                        )
+                    add_message(
+                        "assistant",
+                        f"I could not apply that action yet. {message}",
+                    )
 
                 st.rerun()
 

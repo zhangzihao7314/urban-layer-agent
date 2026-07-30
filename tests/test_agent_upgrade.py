@@ -20,11 +20,23 @@ from src.agent.flexible_dialogue import (
 )
 from src.agent.conversation_controller import ConversationController, explain_grounded_choice
 from src.agent.proposal_engine import explain_scenario_comparison
+from src.agent.intent_router import route_intent
+from src.agent.schemas import Intent
 
 
 ROOT = Path(__file__).resolve().parents[1]
 TYPOLOGY = ROOT / "data/reference/LCZ_urban_types_match.xlsx"
 PREDICTORS = ROOT / "data/reference/ref_predictor_values_mean.csv"
+
+
+def test_revise_command_accepts_punctuation_and_cancel_wording():
+    assert route_intent("Revise.").intent == Intent.REVISE
+    assert route_intent("cancel please").intent == Intent.REVISE
+
+
+def test_informational_question_is_not_a_goal_or_polygon_command():
+    assert route_intent("What is Water?").intent == Intent.CHAT
+    assert route_intent("How to increase the city heat").intent == Intent.CHAT
 
 
 def test_professor_typology_workbook_is_loaded():
@@ -69,6 +81,17 @@ def test_goal_reasoning_is_data_backed():
     assert result.goal == "Urban heat mitigation"
     assert result.ranked_types[0] in {"Dense trees", "Water", "Scattered trees", "Low Plants"}
     assert result.scores["Dense trees"] > result.scores["Compact midrise"]
+
+
+def test_heat_goal_respects_increase_and_decrease_direction():
+    cooling = recommend_for_goal("I want to decrease the city heat", PREDICTORS)
+    heating = recommend_for_goal("How to increase the city heat", PREDICTORS)
+    assert cooling.goal == "Urban heat mitigation"
+    assert heating.goal == "Urban heat increase"
+    assert cooling.scores["Dense trees"] > cooling.scores["Bare rock or paved"]
+    assert heating.scores["Dense trees"] < heating.scores["Bare rock or paved"]
+    assert recommend_for_goal("Do not increase city heat", PREDICTORS).goal == "Urban heat mitigation"
+    assert recommend_for_goal("Avoid cooling the city", PREDICTORS).goal == "Urban heat increase"
 
 
 def test_scenario_comparison_adds_feasibility_warnings():
