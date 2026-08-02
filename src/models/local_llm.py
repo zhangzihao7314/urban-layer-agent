@@ -26,7 +26,7 @@ class LocalLLM(LLM):
     model_path: Optional[str] = Field(default=None)
     model_name: str = Field(default="qwen2-7b-instruct")
     device: str = Field(default="auto")
-    max_new_tokens: int = Field(default=16384)
+    max_new_tokens: int = Field(default=512)
     is_thinking_model: bool = Field(default=False)
 
     # Fields excluded from serialization
@@ -42,7 +42,7 @@ class LocalLLM(LLM):
         model_path: Optional[str] = None,
         model_name: str = "qwen2-7b-instruct",
         device: str = "auto",
-        max_new_tokens: int = 16384,
+        max_new_tokens: int = 512,
         is_thinking_model: bool = False,
         **kwargs
     ):
@@ -182,7 +182,7 @@ class LocalLLM(LLM):
             'is_thinking_model': self.is_thinking_model,
         }
     
-    def generate_stream(self, prompt: str):
+    def generate_stream(self, prompt: str, max_new_tokens: Optional[int] = None):
         """Stream model output as incremental chunks"""
         from transformers import TextIteratorStreamer
         from threading import Thread
@@ -197,9 +197,10 @@ class LocalLLM(LLM):
             self.tokenizer, skip_prompt=True, skip_special_tokens=False
         )
         
+        token_limit = max_new_tokens or self.max_new_tokens
         generation_kwargs = {
             **model_inputs,
-            "max_new_tokens": self.max_new_tokens,
+            "max_new_tokens": token_limit,
             "do_sample": False,
             "pad_token_id": self.tokenizer.pad_token_id,
             "streamer": streamer,
@@ -236,4 +237,3 @@ class LocalLLM(LLM):
                         yield {"type": "answer", "content": cleaned}
         finally:
             thread.join()
-

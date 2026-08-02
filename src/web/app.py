@@ -237,7 +237,7 @@ def classify_user_intent_with_llm(user_text: str):
         polygon_descriptions=polygon_descriptions,
     )
 
-    raw = run_llm_once(prompt)
+    raw = run_llm_once(prompt, max_new_tokens=128)
 
     try:
         start = raw.find("{")
@@ -666,7 +666,7 @@ def write_simulation_explanation_md(
 
     return str(explanation_path)
 
-def run_llm_once(prompt: str) -> str:
+def run_llm_once(prompt: str, max_new_tokens: int = 512) -> str:
     """
     Use the existing local LLM streaming interface as one-shot text generation.
     No need to modify rag_engine.py.
@@ -685,7 +685,10 @@ def run_llm_once(prompt: str) -> str:
     output = ""
 
     try:
-        for chunk in llm.generate_stream(prompt):
+        for chunk in llm.generate_stream(
+            prompt,
+            max_new_tokens=max_new_tokens,
+        ):
             if isinstance(chunk, dict):
                 if chunk.get("type") == "answer":
                     output += chunk.get("content", "")
@@ -2124,13 +2127,18 @@ def show_layer_alterator_agent_page():
         # requirement model and reference tables remain the source of truth.
         elicitation = RequirementElicitationLoop(
             question_generator=lambda requirement, topic: run_llm_once(
-                build_dynamic_question_prompt(requirement, topic)
+                build_dynamic_question_prompt(requirement, topic),
+                max_new_tokens=128,
             )
         )
 
         if agent_state.active_requirement is not None and safe_intent.intent != Intent.SET_POLYGON:
             requirement = agent_state.active_requirement
-            extraction = extract_with_fallback(requirement, user_text, run_llm_once)
+            extraction = extract_with_fallback(
+                requirement,
+                user_text,
+                lambda prompt: run_llm_once(prompt, max_new_tokens=256),
+            )
             if extraction and extraction["confidence"] >= 0.55:
                 requirement = apply_extraction(requirement, extraction)
             # Deterministic parsing is deliberately retained as a safe fallback
