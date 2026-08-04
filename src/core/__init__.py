@@ -1,5 +1,5 @@
 """
-Core utilities for GIS-RAG.
+Core utilities for urban-layer-agent.
 """
 
 
