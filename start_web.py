@@ -1,5 +1,5 @@
 """
-Script to launch the GIS-RAG web interface.
+Script to launch the Urban Layer Agent web interface.
 """
 import sys
 import os
@@ -14,7 +14,7 @@ if __name__ == "__main__":
     if show_host in {"0.0.0.0", "::"}:
         show_host = "127.0.0.1"
 
-    print(f"🌐 启动GIS-RAG Web界面...")
+    print("🌐 启动 Urban Layer Agent Web 界面...")
     print(f"🔗 地址: http://{show_host}:{settings.WEB_PORT}")
     
     # Start using streamlit run command
@@ -48,7 +48,6 @@ if __name__ == "__main__":
         pass
 
     proc.wait()
-
 
 
 
