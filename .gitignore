@@ -25,6 +25,8 @@ data/layer_alterator_outputs/
 data/layer_alterator_rasters/
 data/uploads/
 data/tasks/
+data/simulation_inputs/ucps/
+data/simulation_inputs/lc_fractions/
 
 # Operating system files
 Thumbs.db

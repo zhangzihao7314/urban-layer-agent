@@ -94,6 +94,13 @@ def test_heat_goal_respects_increase_and_decrease_direction():
     assert recommend_for_goal("Avoid cooling the city", PREDICTORS).goal == "Urban heat increase"
 
 
+def test_heat_goal_supports_chinese_direction():
+    cooling = recommend_for_goal("我希望降低城市热并保留休闲空间", PREDICTORS)
+    heating = recommend_for_goal("让这个区域升温", PREDICTORS)
+    assert cooling.goal == "Urban heat mitigation"
+    assert heating.goal == "Urban heat increase"
+
+
 def test_scenario_comparison_adds_feasibility_warnings():
     recommendation = recommend_for_goal("reduce urban heat", PREDICTORS)
     results = compare_scenarios({

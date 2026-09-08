@@ -16,24 +16,37 @@ GOAL_PROFILES = {
     "Urban heat increase": {
         "keywords": [
             "increase heat", "increase the city heat", "make the city hotter",
-            "raise temperature", "higher temperature",
+            "raise temperature", "higher temperature", "增加城市热", "提高温度",
+            "升高温度", "城市升温",
         ],
         "weights": {"F_TV": -0.38, "F_G": -0.22, "F_W": -0.18, "IMD": 0.22},
     },
     "Urban heat mitigation": {
-        "keywords": ["heat", "hot", "cool", "temperature", "heat island"],
+        "keywords": [
+            "heat", "hot", "cool", "temperature", "heat island",
+            "城市热", "降温", "热岛", "温度", "冷却",
+        ],
         "weights": {"F_TV": 0.38, "F_G": 0.22, "F_W": 0.18, "IMD": -0.22},
     },
     "Urban greening": {
-        "keywords": ["green", "vegetation", "tree", "park", "biodiversity"],
+        "keywords": [
+            "green", "vegetation", "tree", "park", "biodiversity",
+            "绿化", "植被", "树木", "公园", "生物多样性",
+        ],
         "weights": {"F_TV": 0.55, "F_G": 0.35, "IMD": -0.10},
     },
     "Blue infrastructure": {
-        "keywords": ["water", "blue", "flood", "drainage", "pond"],
+        "keywords": [
+            "water", "blue", "flood", "drainage", "pond",
+            "水体", "蓝绿", "洪水", "排水", "池塘",
+        ],
         "weights": {"F_W": 0.70, "F_G": 0.15, "F_TV": 0.15},
     },
     "Open morphology": {
-        "keywords": ["open", "ventilation", "less dense", "air flow"],
+        "keywords": [
+            "open", "ventilation", "less dense", "air flow",
+            "开放空间", "通风", "降低密度", "空气流动",
+        ],
         "weights": {"SVF": 0.35, "IMD": -0.30, "BSF": -0.20, "F_G": 0.15},
     },
 }
@@ -49,9 +62,18 @@ class GoalRecommendation:
 
 def infer_goal(text: str) -> str:
     normalized = text.lower()
-    heat_terms = ("heat", "temperature", "hot", "warm", "cool")
-    increase_terms = ("increase", "raise", "higher", "hotter", "more heat")
-    decrease_terms = ("decrease", "reduce", "lower", "cool", "mitigate", "less heat")
+    heat_terms = (
+        "heat", "temperature", "hot", "warm", "cool",
+        "城市热", "热岛", "温度", "升温", "降温", "冷却",
+    )
+    increase_terms = (
+        "increase", "raise", "higher", "hotter", "more heat",
+        "增加", "提高", "升高", "升温", "更热",
+    )
+    decrease_terms = (
+        "decrease", "reduce", "lower", "cool", "mitigate", "less heat",
+        "降低", "减少", "缓解", "降温", "冷却",
+    )
     if any(term in normalized for term in heat_terms):
         if any(
             phrase in normalized

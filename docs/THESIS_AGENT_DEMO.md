@@ -14,7 +14,11 @@
 9. Ask: `Make Polygon 8 a grass park and leave Polygon 9 unchanged.`
 10. Review and confirm the plan.
 11. Generate Layer Alterator inputs and inspect the validation report.
-12. Configure UCP/fraction folders and run C1.
+12. Run C1, or select **C2/C3 — direct percentage adjustment** and enter, for
+    example, `Increase F_TV in Polygon 7 by 20% and reduce F_G by 10%`.
+    Explicit PCT rules for all predictors mean C2; a selected subset means C3.
+    The fixed Milan UCP/fraction rasters are
+    loaded automatically from the project; manual paths are only an advanced option.
 13. Show that “simulation completed” appears only after raster validation.
 
 The Agent retrieves facts from the professor's tables. It does not claim legal

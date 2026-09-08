@@ -6,7 +6,12 @@ from pathlib import Path
 
 from src.layer_alterator.percentage import apply_percentage, normalize_fraction_rasters
 from src.layer_alterator.router import require_executable
-from src.layer_alterator.service import LayerAlteratorResult, run_c1_layer_alterator
+from src.layer_alterator.service import (
+    LayerAlteratorResult,
+    run_c1_layer_alterator,
+    run_c2_layer_alterator,
+    run_c3_layer_alterator,
+)
 
 
 def _action(value):
@@ -27,6 +32,14 @@ def run_layer_alterator(
     classification = require_executable(actions)
     if classification.code == "C1":
         return run_c1_layer_alterator(
+            vector_mask_path, rules_path, ucp_folder, fractions_folder, output_folder
+        )
+    if classification.code == "C2":
+        return run_c2_layer_alterator(
+            vector_mask_path, rules_path, ucp_folder, fractions_folder, output_folder
+        )
+    if classification.code == "C3" and vector_mask_path and len(rules) == 12:
+        return run_c3_layer_alterator(
             vector_mask_path, rules_path, ucp_folder, fractions_folder, output_folder
         )
 

@@ -74,7 +74,8 @@ def duplicate_task(tasks_root: Path, task_id: str):
     source = load_task(tasks_root, task_id)
     duplicate = new_task(tasks_root, f"{source['title']} (copy)")
     for key in ("messages", "vector_name", "id_column", "polygon_ids",
-                "goal", "decisions", "unchanged"):
+                "goal", "decisions", "unchanged", "layer_alterator_mode",
+                "c2_confirmed", "c2_unchanged", "c2_snapshots", "c3_predictors"):
         duplicate[key] = source.get(key)
     source_vector = source.get("vector_path")
     if source_vector and Path(source_vector).exists():

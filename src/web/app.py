@@ -30,6 +30,7 @@ from src.layer_alterator_agent.matcher import match_urban_type
 from src.layer_alterator_agent.reference_loader import (
     load_reference_table,
     get_predictor_values,
+    PREDICTOR_COLUMNS,
 )
 from src.agent.schemas import AgentStage, AgentState, Intent, TypologyProposal
 from src.agent.intent_router import route_intent
@@ -81,6 +82,16 @@ from src.agent.contextual_queries import (
     is_social_or_meta_message,
 )
 from src.layer_alterator.simulation_runner import run_layer_alterator
+from src.layer_alterator_agent.rules_generator import generate_percentage_rules
+from src.layer_alterator_agent.c2_vector_writer import generate_c2_inputs, generate_c3_inputs
+from src.agent.c2_dialogue import (
+    continue_c2_proposal,
+    extract_polygon_id,
+    format_c2_proposal,
+    format_c2_status,
+    merge_confirmed_percentage_proposal,
+    start_c2_proposal,
+)
 from src.web.workspace_helpers import (
     add_delivery_bundle,
     generation_checklist,
@@ -329,7 +340,10 @@ def normalize_intent_result(user_text: str, intent_result: dict):
 def recommend_urban_types_from_goal(user_goal: str):
     text = user_goal.lower()
 
-    if any(k in text for k in ["heat", "hot", "cool", "temperature", "热岛", "降温", "凉快"]):
+    if any(k in text for k in [
+        "heat", "hot", "cool", "temperature",
+        "城市热", "热岛", "降温", "凉快", "冷却", "温度",
+    ]):
         return {
             "goal": "Urban heat mitigation",
             "recommended_types": ["Dense trees", "Low Plants", "Open low-rise"],
@@ -1811,6 +1825,8 @@ def show_layer_alterator_agent_page():
 
 
     reference_table_path = settings.PROJECT_ROOT / "data" / "reference" / "ref_predictor_values_mean.csv"
+    default_ucp_folder = settings.PROJECT_ROOT / "data" / "simulation_inputs" / "ucps"
+    default_fractions_folder = settings.PROJECT_ROOT / "data" / "simulation_inputs" / "lc_fractions"
 
     if not reference_table_path.exists():
         st.error(f"Reference table not found: {reference_table_path}")
@@ -1838,11 +1854,17 @@ def show_layer_alterator_agent_page():
         "la_processing": False,
         "la_agent_state": AgentState(),
         "la_layer_alterator_result": None,
-        "la_ucp_folder": "",
-        "la_fractions_folder": "",
+        "la_ucp_folder": str(default_ucp_folder),
+        "la_fractions_folder": str(default_fractions_folder),
+        "la_layer_alterator_mode": "C1",
         "la_pending_batch": None,
         "la_upload_widget_had_file": False,
         "la_restore_warning": "",
+        "la_c2_pending": None,
+        "la_c2_confirmed": {},
+        "la_c2_unchanged": [],
+        "la_c2_snapshots": [],
+        "la_c3_predictors": [],
     }
 
     for key, value in defaults.items():
@@ -1876,6 +1898,12 @@ def show_layer_alterator_agent_page():
                 state.active_requirement.to_dict() if state.active_requirement else None
             ),
             "outputs": st.session_state.la_generation_result or {},
+            "layer_alterator_mode": st.session_state.la_layer_alterator_mode,
+            "c2_pending": st.session_state.la_c2_pending,
+            "c2_confirmed": {str(k): v for k, v in st.session_state.la_c2_confirmed.items()},
+            "c2_unchanged": st.session_state.la_c2_unchanged,
+            "c2_snapshots": st.session_state.la_c2_snapshots,
+            "c3_predictors": st.session_state.la_c3_predictors,
         }
 
     def persist_current_task():
@@ -1899,6 +1927,18 @@ def show_layer_alterator_agent_page():
         st.session_state.la_id_column = task.get("id_column")
         st.session_state.la_polygon_ids = task.get("polygon_ids", [])
         st.session_state.la_global_goal = task.get("goal", "")
+        restored_mode = task.get("layer_alterator_mode", "C1")
+        st.session_state.la_layer_alterator_mode = (
+            "PCT" if restored_mode in {"C2", "C3"} else restored_mode
+        )
+        st.session_state.la_c2_pending = task.get("c2_pending")
+        st.session_state.la_c2_confirmed = {
+            int(k) if str(k).isdigit() else k: v
+            for k, v in task.get("c2_confirmed", {}).items()
+        }
+        st.session_state.la_c2_unchanged = task.get("c2_unchanged", [])
+        st.session_state.la_c2_snapshots = task.get("c2_snapshots", [])
+        st.session_state.la_c3_predictors = task.get("c3_predictors", [])
         decisions = {int(k): v for k, v in task.get("decisions", {}).items()}
         unchanged = task.get("unchanged", [])
         restored_outputs = task.get("outputs") or {}
@@ -1961,13 +2001,15 @@ def show_layer_alterator_agent_page():
                 "Create task",
                 type="primary",
                 use_container_width=True,
-                disabled=not bool(new_task_name.strip()),
             ):
-                persist_current_task()
-                task = new_task(tasks_root, new_task_name.strip())
-                st.session_state.la_current_task_id = task["task_id"]
-                st.session_state.clear_new_task_name = True
-                st.rerun()
+                if not new_task_name.strip():
+                    st.warning("Enter a task name before creating the task.")
+                else:
+                    persist_current_task()
+                    task = new_task(tasks_root, new_task_name.strip())
+                    st.session_state.la_current_task_id = task["task_id"]
+                    st.session_state.clear_new_task_name = True
+                    st.rerun()
         tasks = list_tasks(tasks_root)
         labels = {item["task_id"]: item.get("title", "Untitled") for item in tasks}
         st.markdown("### History")
@@ -2050,6 +2092,176 @@ def show_layer_alterator_agent_page():
         st.session_state.la_current_task_id = task["task_id"]
         st.rerun()
 
+    def process_c2_message(user_text: str) -> bool:
+        """Handle direct user-specified C2/C3 percentages only."""
+        mode = st.session_state.la_layer_alterator_mode
+        display_mode = "Percentage adjustment"
+        lowered = user_text.lower().strip().rstrip(".")
+        pending = st.session_state.la_c2_pending
+        is_c2_command = bool(
+            pending
+            or re.search(r"(?:polygon|zone|地块|区域)\s*#?\s*[A-Za-z0-9_.-]+", user_text, re.I)
+            or lowered in {"confirm", "确认", "revise", "修改", "undo", "撤销", "status", "当前方案", "generate", "生成"}
+            or "remaining unchanged" in lowered
+            or "其余不变" in user_text
+        )
+        if not is_c2_command:
+            return False
+        if not st.session_state.la_vector_path:
+            add_message("assistant", "Please upload a polygon vector before creating a percentage plan.")
+            return True
+
+        if re.search(r"\btowards?\b|(?:向|朝).*(?:类型|转变|过渡|调整)", user_text, re.I):
+            add_message(
+                "assistant",
+                "The percentage workflow no longer derives changes from a target LCZ type. "
+                "Please specify the Polygon, predictor, direction, and percentage directly.\n\n"
+                "Example: `Increase F_TV in Polygon 7 by 20% and reduce F_G by 10%.`",
+            )
+            return True
+        if "%" not in user_text and re.search(
+            r"\b(?:set|make)\b.*\bpolygon\b|\bpolygon\b.*\b(?:become|as)\b|"
+            r"(?:设置|设为|变成).*(?:地块|区域)|(?:地块|区域).*?(?:设置|设为|变成)",
+            user_text,
+            re.I,
+        ):
+            add_message(
+                "assistant",
+                "This is an LCZ type-replacement request, which belongs to the C1 workflow. "
+                "Switch to `C1 — LCZ type replacement`, or provide direct predictor "
+                "percentages for C2/C3.",
+            )
+            return True
+
+        if pending and lowered in {"revise", "修改"}:
+            st.session_state.la_c2_pending = None
+            add_message("assistant", "The percentage proposal was discarded. Please describe the Polygon again.")
+            return True
+
+        # A complete command naming a Polygon starts a new proposal even when
+        # another proposal is waiting for confirmation. Otherwise a command
+        # for Polygon 7 could accidentally inherit the pending Polygon 8 ID.
+        mentioned_polygon = extract_polygon_id(
+            user_text, st.session_state.la_polygon_ids
+        )
+        if (
+            pending
+            and pending.get("status") != "needs_polygon"
+            and mentioned_polygon is not None
+        ):
+            st.session_state.la_c2_pending = None
+            pending = None
+
+        if lowered in {"undo", "撤销"}:
+            if not st.session_state.la_c2_snapshots:
+                add_message("assistant", "There is no confirmed percentage change to undo.")
+            else:
+                snapshot = st.session_state.la_c2_snapshots.pop()
+                st.session_state.la_c2_confirmed = snapshot["confirmed"]
+                st.session_state.la_c2_unchanged = snapshot["unchanged"]
+                st.session_state.la_c3_predictors = snapshot.get("predictors", [
+                    name for name in PREDICTOR_COLUMNS
+                    if any(
+                        values.get(name, 0) != 0
+                        for values in snapshot["confirmed"].values()
+                    )
+                ])
+                add_message("assistant", format_c2_status(
+                    st.session_state.la_c2_confirmed,
+                    st.session_state.la_c2_unchanged,
+                    st.session_state.la_polygon_ids,
+                ))
+            return True
+        if lowered in {"status", "当前方案"}:
+            add_message("assistant", format_c2_status(
+                st.session_state.la_c2_confirmed,
+                st.session_state.la_c2_unchanged,
+                st.session_state.la_polygon_ids,
+            ))
+            return True
+        if "remaining unchanged" in lowered or "其余不变" in user_text:
+            covered = set(st.session_state.la_c2_confirmed)
+            st.session_state.la_c2_unchanged = [
+                pid for pid in st.session_state.la_polygon_ids if pid not in covered
+            ]
+            add_message("assistant", format_c2_status(
+                st.session_state.la_c2_confirmed,
+                st.session_state.la_c2_unchanged,
+                st.session_state.la_polygon_ids,
+            ))
+            return True
+        if lowered in {"generate", "生成"}:
+            covered = set(st.session_state.la_c2_confirmed) | set(st.session_state.la_c2_unchanged)
+            missing = [pid for pid in st.session_state.la_polygon_ids if pid not in covered]
+            if missing:
+                add_message(
+                    "assistant",
+                    f"The percentage plan cannot be generated yet. Define Polygon {missing[0]}; the remaining polygons will stay unchanged.",
+                )
+                return True
+            resolved_rule = (
+                "C2" if set(st.session_state.la_c3_predictors) == set(PREDICTOR_COLUMNS)
+                else "C3"
+            )
+            output_dir = str(task_dir(tasks_root, st.session_state.la_current_task_id) / f"{resolved_rule.lower()}_inputs")
+            if resolved_rule == "C2":
+                result = generate_c2_inputs(
+                    st.session_state.la_vector_path, st.session_state.la_id_column,
+                    st.session_state.la_c2_confirmed, output_dir,
+                )
+            else:
+                result = generate_c3_inputs(
+                    st.session_state.la_vector_path, st.session_state.la_id_column,
+                    st.session_state.la_c2_confirmed,
+                    st.session_state.la_c3_predictors, output_dir,
+                )
+            st.session_state.la_generation_result = result
+            st.session_state.la_stage = "generated"
+            st.session_state.la_agent_state.stage = AgentStage.INPUTS_GENERATED
+            add_message("assistant", msg_type="generation_result")
+            return True
+
+        if pending and pending.get("status") == "ready":
+            if lowered in {"confirm", "确认"} or is_natural_confirmation(user_text):
+                st.session_state.la_c2_snapshots.append({
+                    "confirmed": dict(st.session_state.la_c2_confirmed),
+                    "unchanged": list(st.session_state.la_c2_unchanged),
+                    "predictors": list(st.session_state.la_c3_predictors),
+                })
+                (
+                    st.session_state.la_c2_confirmed,
+                    st.session_state.la_c2_unchanged,
+                    st.session_state.la_c3_predictors,
+                ) = merge_confirmed_percentage_proposal(
+                    st.session_state.la_c2_confirmed,
+                    st.session_state.la_c2_unchanged,
+                    st.session_state.la_polygon_ids,
+                    pending,
+                )
+                st.session_state.la_c2_pending = None
+                add_message("assistant", f"{pending.get('rule_mode', display_mode)} proposal confirmed.\n\n" + format_c2_status(
+                    st.session_state.la_c2_confirmed,
+                    st.session_state.la_c2_unchanged,
+                    st.session_state.la_polygon_ids,
+                ))
+                return True
+            # A corrected percentage replaces the pending proposal.
+            proposal = start_c2_proposal(
+                f"Polygon {pending['polygon_id']} {user_text}",
+                st.session_state.la_polygon_ids,
+            )
+        elif pending:
+            proposal = continue_c2_proposal(pending, user_text, st.session_state.la_polygon_ids)
+        else:
+            proposal = start_c2_proposal(user_text, st.session_state.la_polygon_ids)
+
+        st.session_state.la_c2_pending = proposal
+        if proposal["status"] == "ready":
+            add_message("assistant", format_c2_proposal(proposal))
+        else:
+            add_message("assistant", proposal["question"])
+        return True
+
 
 
 
@@ -2060,6 +2272,31 @@ def show_layer_alterator_agent_page():
             return
 
         agent_state = st.session_state.la_agent_state
+        if (
+            st.session_state.la_layer_alterator_mode == "C1"
+            and "%" in user_text
+            and re.search(r"(?:polygon|zone|地块|区域)\s*#?\s*[A-Za-z0-9_.-]+", user_text, re.I)
+        ):
+            add_message(
+                "assistant",
+                "This is a direct percentage-adjustment request, which belongs to the "
+                "C2/C3 workflow. Switch to `C2/C3 — direct percentage adjustment` to continue.",
+            )
+            return
+        # In percentage mode, an explicit Polygon/Zone command must take
+        # precedence over informational type queries. Ordinary questions such
+        # as "What is Water?" still continue through the information routes.
+        explicit_percentage_command = bool(re.search(
+            r"(?:polygon|zone|地块|区域)\s*#?\s*[A-Za-z0-9_.-]+",
+            user_text,
+            re.I,
+        ))
+        if (
+            st.session_state.la_layer_alterator_mode == "PCT"
+            and explicit_percentage_command
+            and process_c2_message(user_text)
+        ):
+            return
         if asks_for_type_comparison(user_text):
             answer = compare_urban_types(
                 user_text,
@@ -2104,6 +2341,8 @@ def show_layer_alterator_agent_page():
             if not answer:
                 answer = answer_general_chat(user_text)
             add_message("assistant", answer)
+            return
+        if st.session_state.la_layer_alterator_mode == "PCT" and process_c2_message(user_text):
             return
         goal_change_requested = (
             bool(st.session_state.la_global_goal)
@@ -2472,24 +2711,42 @@ def show_layer_alterator_agent_page():
                     reply += f"{scenario['description']}\n"
                     reply += "Urban types: " + ", ".join(scenario["types"]) + "\n"
             else:
-                reply += (
-                    "\nThis version cannot yet simulate population growth directly. "
-                    "The professor-provided reference tables describe LCZ urban types "
-                    "and physical predictor values, but they do not contain population "
-                    "projections, time steps, housing demand, or growth-allocation rules. "
-                    "I have therefore not invented LCZ scenarios for this request.\n\n"
-                    "You may describe the spatial consequence you want to test—for "
-                    "example, more compact housing, open low-rise expansion, or "
-                    "preserving green space—or provide population and land-demand data."
-                )
+                if re.search(r"population|人口|growth|增长", user_text, re.I):
+                    reply += (
+                        "\nThis version cannot yet simulate population growth directly. "
+                        "The reference tables do not contain population projections, "
+                        "time steps, housing demand, or growth-allocation rules. Please "
+                        "describe the spatial consequence to test, such as compact "
+                        "housing or open low-rise expansion."
+                    )
+                else:
+                    reply += (
+                        "\nI could not map this goal to a supported physical planning "
+                        "profile yet. Please clarify whether your priority is heat, "
+                        "vegetation, water/drainage, or urban openness. No LCZ scenario "
+                        "has been invented for the unclear request."
+                    )
 
-            reply += (
-                "\nYou can continue freely. For example:\n"
-                "- `Make all polygons Dense trees`\n"
-                f"- `Polygon {st.session_state.la_polygon_ids[0]} should become Water`\n"
-                "- `Why did you recommend this?`\n"
-                "- `Generate`"
-            )
+            if st.session_state.la_layer_alterator_mode == "PCT":
+                reply += (
+                    "\nIn direct percentage mode, the overall goal is optional and is not "
+                    "used to invent percentages. Specify the changes directly. For example:\n"
+                    f"- `Increase F_TV in Polygon {st.session_state.la_polygon_ids[0]} by 20% "
+                    "and reduce F_G by 10%`\n"
+                    "- `Leave the remaining polygons unchanged`\n"
+                    "- `Generate`\n\n"
+                    "The Agent extracts and validates the percentages you provide. It does "
+                    "not derive them from an LCZ target. All 12 predictors explicitly set to "
+                    "PCT means C2; a selected subset means C3."
+                )
+            else:
+                reply += (
+                    "\nYou can continue freely. For example:\n"
+                    "- `Make all polygons Dense trees`\n"
+                    f"- `Polygon {st.session_state.la_polygon_ids[0]} should become Water`\n"
+                    "- `Why did you recommend this?`\n"
+                    "- `Generate`"
+                )
 
             add_message("assistant", reply)
             if goal_change_requested and agent_state.confirmed_decisions:
@@ -2718,16 +2975,31 @@ def show_layer_alterator_agent_page():
         return
 
     # ---------- Guided workspace header ----------
+    c2_mode = st.session_state.la_layer_alterator_mode == "PCT"
+    planned_ids = (
+        set(st.session_state.la_c2_confirmed) | set(st.session_state.la_c2_unchanged)
+        if c2_mode else
+        set(st.session_state.la_agent_state.confirmed_decisions) |
+        set(st.session_state.la_agent_state.unchanged_polygon_ids)
+    )
+    goal_or_direct_ready = (
+        bool(st.session_state.la_vector_path)
+        if c2_mode
+        else bool(st.session_state.la_global_goal or planned_ids)
+    )
     workflow_flags = [
         bool(st.session_state.la_vector_path),
-        bool(st.session_state.la_global_goal),
-        bool(st.session_state.la_agent_state.confirmed_decisions)
-        or bool(st.session_state.la_agent_state.unchanged_polygon_ids),
-        st.session_state.la_agent_state.stage == AgentStage.READY_TO_GENERATE,
+        goal_or_direct_ready,
+        bool(planned_ids),
+        bool(st.session_state.la_polygon_ids) and planned_ids == set(st.session_state.la_polygon_ids),
         bool(st.session_state.la_generation_result),
         bool(st.session_state.la_layer_alterator_result),
     ]
-    workflow_labels = ["1 Upload", "2 Goal", "3 Plan", "4 Review", "5 Generate", "6 Simulate"]
+    workflow_labels = [
+        "1 Upload",
+        "2 Goal/LCZ" if not c2_mode else "2 Direct PCT",
+        "3 Plan", "4 Review", "5 Generate", "6 Simulate",
+    ]
     step_columns = st.columns(6)
     for index, (column, label) in enumerate(zip(step_columns, workflow_labels)):
         with column:
@@ -2753,6 +3025,44 @@ def show_layer_alterator_agent_page():
         # Input Vector
         # =========================================================
         with st.expander("Input Vector", expanded=not bool(st.session_state.la_vector_path)):
+            selected_mode = st.selectbox(
+                "Planning workflow",
+                options=["C1", "PCT"],
+                index=0 if st.session_state.la_layer_alterator_mode == "C1" else 1,
+                format_func=lambda value: (
+                    "C1 — LCZ type replacement"
+                    if value == "C1"
+                    else "C2/C3 — direct percentage adjustment"
+                ),
+                help=(
+                    "C1 obtains target values from the professor-provided LCZ table. "
+                    "C2/C3 uses percentages explicitly specified by the user."
+                ),
+            )
+            if selected_mode != st.session_state.la_layer_alterator_mode:
+                st.session_state.la_c2_pending = None
+                st.session_state.la_c2_confirmed = {}
+                st.session_state.la_c2_unchanged = []
+                st.session_state.la_c2_snapshots = []
+                st.session_state.la_c3_predictors = []
+                st.session_state.la_generation_result = None
+                st.session_state.la_layer_alterator_result = None
+                st.session_state.la_layer_alterator_mode = selected_mode
+                persist_current_task()
+                st.rerun()
+            st.session_state.la_layer_alterator_mode = selected_mode
+
+            if selected_mode == "C1":
+                st.info(
+                    "Describe an overall goal for Agent recommendations, or directly assign "
+                    "an LCZ type. Example: `Set Polygon 7 to Dense trees.`"
+                )
+            else:
+                st.info(
+                    "Specify the Polygon, predictor, direction, and percentage directly. "
+                    "Example: `Increase F_TV in Polygon 7 by 20% and reduce F_G by 10%.` "
+                    "An overall goal is optional."
+                )
             uploaded_vector = st.file_uploader(
                 "Upload polygon vector",
                 type=["geojson", "gpkg", "shp"],
@@ -2777,6 +3087,11 @@ def show_layer_alterator_agent_page():
             st.session_state.la_generation_result = None
             st.session_state.la_layer_alterator_result = None
             st.session_state.la_before_after_df = pd.DataFrame()
+            st.session_state.la_c2_pending = None
+            st.session_state.la_c2_confirmed = {}
+            st.session_state.la_c2_unchanged = []
+            st.session_state.la_c2_snapshots = []
+            st.session_state.la_c3_predictors = []
             state = st.session_state.la_agent_state
             state.vector_path = None
             state.id_column = None
@@ -2828,7 +3143,16 @@ def show_layer_alterator_agent_page():
                 st.session_state.la_global_goal = ""
                 st.session_state.la_current_polygon_index = 0
                 st.session_state.la_generation_result = None
-                st.session_state.la_stage = "waiting_for_goal"
+                st.session_state.la_c2_pending = None
+                st.session_state.la_c2_confirmed = {}
+                st.session_state.la_c2_unchanged = []
+                st.session_state.la_c2_snapshots = []
+                st.session_state.la_c3_predictors = []
+                st.session_state.la_stage = (
+                    "waiting_for_goal"
+                    if st.session_state.la_layer_alterator_mode == "C1"
+                    else "waiting_for_percentage"
+                )
                 register_vector(
                     st.session_state.la_agent_state,
                     str(vector_path),
@@ -2845,12 +3169,24 @@ def show_layer_alterator_agent_page():
 
                 add_message("assistant", msg_type="vector_preview")
 
-                add_message(
-                    "assistant",
-                    "Please describe the overall simulation goal. "
-                    "For example: "
-                    "*I want to reduce urban heat island effect by adding more vegetation.*"
-                )
+                if st.session_state.la_layer_alterator_mode == "C1":
+                    add_message(
+                        "assistant",
+                        "C1 uses LCZ reference values. Describe an overall simulation goal "
+                        "for Agent recommendations, or directly assign an LCZ type.\n\n"
+                        "Examples:\n"
+                        "- *I want to reduce urban heat while keeping recreational space.*\n"
+                        f"- `Set Polygon {polygon_ids[0]} to Dense trees.`"
+                    )
+                else:
+                    add_message(
+                        "assistant",
+                        "C2/C3 uses percentages that you specify directly; an overall goal "
+                        "is optional. Include the Polygon ID, predictor, direction, and percentage.\n\n"
+                        "Example:\n"
+                        f"- `Increase F_TV in Polygon {polygon_ids[0]} by 20% and reduce F_G by 10%.`\n\n"
+                        "All 12 predictors explicitly using PCT is C2; a selected subset is C3."
+                    )
 
                 st.rerun()
 
@@ -2884,11 +3220,21 @@ def show_layer_alterator_agent_page():
                 if pid not in st.session_state.la_polygon_descriptions
             ])
 
-            decided_ids = {
-                pid for pid, desc in st.session_state.la_polygon_descriptions.items()
-                if str(desc).strip()
-            }
-            unchanged_ids = set(st.session_state.la_agent_state.unchanged_polygon_ids)
+            if st.session_state.la_layer_alterator_mode == "PCT":
+                decided_ids = set(st.session_state.la_c2_confirmed)
+                unchanged_ids = set(st.session_state.la_c2_unchanged)
+                completed = len(decided_ids | unchanged_ids)
+                descriptions_for_progress = {
+                    pid: f"{st.session_state.la_layer_alterator_mode} percentage plan"
+                    for pid in decided_ids
+                }
+            else:
+                decided_ids = {
+                    pid for pid, desc in st.session_state.la_polygon_descriptions.items()
+                    if str(desc).strip()
+                }
+                unchanged_ids = set(st.session_state.la_agent_state.unchanged_polygon_ids)
+                descriptions_for_progress = st.session_state.la_polygon_descriptions
             has_all_polygons = (
                 total > 0
                 and decided_ids | unchanged_ids == set(st.session_state.la_polygon_ids)
@@ -2901,10 +3247,12 @@ def show_layer_alterator_agent_page():
 
             progress_steps, progress_value = workflow_progress(
                 has_vector,
-                has_goal,
+                (has_goal or bool(decided_ids))
+                if st.session_state.la_layer_alterator_mode == "C1"
+                else True,
                 st.session_state.la_polygon_ids,
-                st.session_state.la_polygon_descriptions,
-                st.session_state.la_agent_state.unchanged_polygon_ids,
+                descriptions_for_progress,
+                list(unchanged_ids),
                 has_outputs,
             )
 
@@ -2920,11 +3268,10 @@ def show_layer_alterator_agent_page():
                 else "Input pending"
             )
 
-            st.write(
-                "Goal defined"
-                if has_goal
-                else "Goal pending"
-            )
+            if st.session_state.la_layer_alterator_mode == "C1":
+                st.write("Goal defined" if has_goal else "Goal optional when LCZ type is explicit")
+            else:
+                st.write("Overall goal optional — direct percentages required")
 
             st.write(
                 f"Polygon decisions completed ({completed}/{total})"
@@ -3015,28 +3362,66 @@ def show_layer_alterator_agent_page():
 
         result = st.session_state.la_generation_result
         with st.expander("Run Layer Alterator", expanded=False):
-            st.caption("Automatically validates and routes C0, C1, C2, or C3 rules.")
-            st.session_state.la_ucp_folder = st.text_input(
-                "UCP raster folder",
-                value=st.session_state.la_ucp_folder,
-                placeholder="Folder containing TCH.tif, IMD.tif, BH.tif, BSF.tif, SVF.tif",
+            selected_mode = st.session_state.la_layer_alterator_mode
+            st.caption(
+                "Current workflow: C1 — LCZ type replacement"
+                if selected_mode == "C1"
+                else "Current workflow: C2/C3 — direct percentage adjustment"
             )
-            st.session_state.la_fractions_folder = st.text_input(
-                "Fraction raster folder",
-                value=st.session_state.la_fractions_folder,
-                placeholder="Folder containing the seven F_*.tif layers",
+            if selected_mode == "PCT":
+                st.info(
+                    "The Agent uses only percentages explicitly supplied by the user. "
+                    "It does not calculate percentages from an LCZ target. All 12 predictors "
+                    "using PCT means C2; a selected subset means C3."
+                )
+            default_data_ready = (
+                Path(st.session_state.la_ucp_folder).exists()
+                and Path(st.session_state.la_fractions_folder).exists()
             )
-            if st.button("Run Layer Alterator", use_container_width=True, disabled=not bool(result)):
+            if default_data_ready:
+                st.success("Project simulation rasters are ready.")
+            else:
+                st.warning("Project simulation rasters are missing. See Advanced data paths.")
+            with st.expander("Advanced data paths", expanded=not default_data_ready):
+                st.caption("Project defaults are used automatically; normally no change is needed.")
+                st.session_state.la_ucp_folder = st.text_input(
+                    "UCP raster folder", value=st.session_state.la_ucp_folder
+                )
+                st.session_state.la_fractions_folder = st.text_input(
+                    "Fraction raster folder", value=st.session_state.la_fractions_folder
+                )
+            run_ready = (
+                bool(result)
+                if selected_mode == "C1"
+                else bool(result and result.get("workflow") in {"C2", "C3"})
+            )
+            if st.button("Run Layer Alterator", use_container_width=True, disabled=not run_ready):
                 try:
                     st.session_state.la_agent_state.stage = AgentStage.RUNNING_LAYER_ALTERATOR
+                    if selected_mode == "C1":
+                        execution_vector = result["updated_vector_path"]
+                        execution_rules = result["rules_path"]
+                        output_name = "rasters"
+                    else:
+                        resolved_rule = result.get("workflow")
+                        percentage_dir = task_dir(
+                            tasks_root, st.session_state.la_current_task_id
+                        ) / f"{resolved_rule.lower()}_inputs"
+                        percentage_dir.mkdir(parents=True, exist_ok=True)
+                        if resolved_rule in {"C2", "C3"}:
+                            execution_vector = result["updated_vector_path"]
+                            execution_rules = result["rules_path"]
+                        else:
+                            raise ValueError("Generate and confirm the percentage plan first.")
+                        output_name = f"rasters_{resolved_rule.lower()}"
                     layer_result = run_layer_alterator(
-                        vector_mask_path=result["updated_vector_path"],
-                        rules_path=result["rules_path"],
+                        vector_mask_path=execution_vector,
+                        rules_path=execution_rules,
                         ucp_folder=st.session_state.la_ucp_folder,
                         fractions_folder=st.session_state.la_fractions_folder,
                         output_folder=str(
                             task_dir(tasks_root, st.session_state.la_current_task_id)
-                            / "rasters"
+                            / output_name
                         ),
                     )
                     st.session_state.la_layer_alterator_result = layer_result
@@ -3051,11 +3436,23 @@ def show_layer_alterator_agent_page():
                             f"Simulation completed and {len(layer_result.raster_outputs)} "
                             "raster outputs passed structural validation."
                         )
-                        st.info(
-                            "C1 intentionally assigns one professor-reference value "
-                            "to every raster cell inside each polygon. Cells outside "
-                            "the polygons retain their original raster values."
-                        )
+                        if selected_mode == "C1":
+                            st.info(
+                                "C1 assigns one professor-reference value to every "
+                                "valid raster cell inside each polygon. Cells outside "
+                                "the polygons retain their original values."
+                            )
+                        elif result.get("workflow") == "C2":
+                            st.info(
+                                "C2 applies each polygon's percentage attributes only "
+                                "inside that polygon. Fraction outputs are normalized "
+                                "per pixel; cells outside polygons remain unchanged."
+                            )
+                        else:
+                            st.info(
+                                "C3 directly changes only PCT predictors. NONE fraction "
+                                "layers may still shift indirectly during joint sum-to-one normalization."
+                            )
                         for warning in raster_validation.warnings:
                             st.warning(warning)
                     else:
@@ -3173,6 +3570,7 @@ def show_layer_alterator_agent_page():
         prompt_map = {
             "waiting_for_vector": "Ask a question, describe a goal, or upload a vector to start...",
             "waiting_for_goal": "Describe your overall simulation goal...",
+            "waiting_for_percentage": "Specify a Polygon, predictor, direction, and percentage...",
             "free_chat": "Type freely: set goal, modify polygons, ask why, or generate...",
             "generated": "Files generated. You can still ask questions or reset.",
         }
@@ -3355,7 +3753,8 @@ def show_layer_alterator_agent_page():
 
                 checks, ready = generation_checklist(
                     bool(st.session_state.la_vector_path),
-                    st.session_state.la_global_goal,
+                    st.session_state.la_global_goal
+                    or ("Direct LCZ assignment" if st.session_state.la_agent_state.confirmed_decisions else ""),
                     st.session_state.la_polygon_ids,
                     st.session_state.la_agent_state.confirmed_decisions,
                     st.session_state.la_agent_state.unchanged_polygon_ids,
